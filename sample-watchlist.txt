@@ -1,0 +1,2 @@
+### Trading Signal
+BTC,ETH,BNB,SOL,FLUX,GTC,ATOM,MNT,PI

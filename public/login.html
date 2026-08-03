@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Đăng nhập · Trading Signal</title><link rel="stylesheet" href="app.css">
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-card">
+      <p class="eyebrow">PRIVATE SIGNAL SCANNER</p>
+      <h1>Trading Signal</h1>
+      <p>Đăng nhập để quản lý watchlist, chạy scanner và gửi cảnh báo Telegram.</p>
+      <form id="loginForm">
+        <label for="username">Tên đăng nhập</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+        <label for="password">Mật khẩu</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="loginButton" type="submit">Đăng nhập</button>
+        <p id="loginState" class="login-state" role="status"></p>
+      </form>
+      <small>Phiên đăng nhập được lưu bằng cookie HttpOnly và chỉ hoạt động qua HTTPS trên server production.</small>
+    </section>
+  </main>
+  <script type="module" src="login.js"></script>
+</body>
+</html>

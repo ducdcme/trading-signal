@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Trading Signal</title><link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">MULTI-ASSET SIGNAL SCANNER</p><h1>Trading Signal</h1><p>CEX, DEX và chứng khoán Việt Nam trên cùng một công cụ.</p></div><div class="header-actions"><span class="live">Closed candles only</span><button id="logout" class="secondary" type="button">Đăng xuất</button></div></header>
+    <nav class="tabs" aria-label="Loại tài sản">
+      <button class="tab active" data-tab="cex">CEX Crypto</button>
+      <button class="tab" data-tab="dex">DEX Crypto</button>
+      <button class="tab" data-tab="stocks">VN Stocks</button>
+      <button class="tab" data-tab="automation">Tự động & Telegram</button>
+    </nav>
+
+    <section class="tab-panel active" id="panel-cex">
+      <section class="controls">
+        <div class="watchlist-import"><div><strong>Watchlist CEX</strong><small>Chỉ cần ticker; tự tìm Binance → Bybit → OKX.</small></div><label class="file-button" for="watchlistFile">Nhập file .txt</label><input id="watchlistFile" type="file" accept=".txt,text/plain"></div>
+        <p id="fileState" class="file-state"></p>
+        <label for="symbols">Danh sách coin <small>cách nhau bằng dấu phẩy hoặc xuống dòng</small></label>
+        <textarea id="symbols" rows="3" spellcheck="false"></textarea>
+        <div class="actions"><select id="cexTimeframe" aria-label="Khung thời gian"><option value="1D">D1</option><option value="1W">W1</option></select><button id="scan">Quét CEX</button><span id="state">Sẵn sàng</span></div>
+      </section>
+      <section class="summary" id="summary"></section>
+      <section class="table-wrap"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Giá đóng</th><th>Nến</th></tr></thead><tbody id="results"></tbody></table></section>
+    </section>
+
+    <section class="tab-panel" id="panel-dex">
+      <section class="controls">
+        <div class="watchlist-import"><div><strong>Token DEX</strong><small>Bắt buộc blockchain và token_address để tránh nhầm token giả.</small></div><label class="file-button" for="dexFile">Nhập file .txt</label><input id="dexFile" type="file" accept=".txt,text/plain"></div>
+        <p id="dexFileState" class="file-state"></p>
+        <label for="dexTokens">Danh sách token address <small>mỗi dòng: chain:token_address</small></label>
+        <textarea id="dexTokens" rows="5" spellcheck="false" placeholder="solana:ĐỊA_CHỈ_TOKEN&#10;base:0xĐỊA_CHỈ_TOKEN&#10;bsc:0xĐỊA_CHỈ_TOKEN"></textarea>
+        <div class="actions"><select id="dexTimeframe" aria-label="Khung thời gian"><option value="1D">D1</option><option value="1W" id="dexWeeklyOption">W1</option></select><button id="scanDex">Quét DEX</button><span id="dexState">GeckoTerminal giới hạn tốc độ; quá trình có thể chậm.</span></div>
+      </section>
+      <section class="summary" id="dexSummary"></section>
+      <section class="table-wrap"><table><thead><tr><th>Token</th><th>Chain / DEX</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Pool / Thanh khoản</th><th>Nến</th></tr></thead><tbody id="dexResults"></tbody></table></section>
+      <p class="note">Tool tự chọn pool có thanh khoản cao nhất đạt ngưỡng 100.000 USD. Luôn kiểm tra lại contract và pool trước khi giao dịch.</p>
+    </section>
+
+    <section class="tab-panel" id="panel-stocks">
+      <section class="controls coming-soon">
+        <p class="eyebrow">SSI FASTCONNECT DATA</p><h2>Chứng khoán Việt Nam</h2>
+        <p>Kiến trúc cấu hình và scheduler đã dành sẵn nguồn STOCK cho FPT, HPG, MBB, DGC, VIX… Kết nối dữ liệu OHLCV điều chỉnh qua SSI sẽ được triển khai ở giai đoạn sau.</p>
+        <textarea rows="3" disabled>FPT, HPG, MBB, DGC, VIX</textarea>
+        <button disabled>Chưa cấu hình SSI API</button>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="panel-automation">
+      <section class="controls automation-controls">
+        <div class="section-heading"><div><p class="eyebrow">SCHEDULER & TELEGRAM BOT</p><h2>Cấu hình chạy tự động</h2></div><span id="telegramStatus" class="status-pill">Đang kiểm tra…</span></div>
+        <p class="security-note">Bot token chỉ đọc từ file <code>.env</code> trên máy chạy tool; giao diện không nhận và không hiển thị token.</p>
+
+        <div class="settings-grid">
+          <fieldset>
+            <legend>1. Telegram</legend>
+            <label for="telegramChatId">Chat ID <small>Cá nhân, nhóm hoặc channel</small></label>
+            <input id="telegramChatId" type="text" placeholder="Ví dụ: 123456789 hoặc -100…" autocomplete="off">
+            <div class="inline-actions"><button type="button" class="secondary" id="findChats">Tìm Chat ID</button><button type="button" class="secondary" id="testTelegram">Gửi tin thử</button></div>
+            <select id="chatCandidates" class="hidden" aria-label="Các chat tìm thấy"></select>
+            <small id="chatHelp">Hãy nhắn <code>/start</code> cho bot trước, sau đó bấm “Tìm Chat ID”.</small>
+          </fieldset>
+
+          <fieldset>
+            <legend>2. Lịch chạy</legend>
+            <label class="check-row"><input id="automationEnabled" type="checkbox"> Bật chạy tự động</label>
+            <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><input id="dailyTime" type="time"><span>mỗi ngày</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div>
+            <small>Múi giờ cố định: Asia/Ho_Chi_Minh. Mặc định 07:10, sau lúc nến UTC đóng.</small>
+          </fieldset>
+        </div>
+
+        <fieldset class="watchlist-fieldset">
+          <legend>3. Watchlist chạy tự động</legend>
+          <div class="settings-grid">
+            <div>
+              <div class="watchlist-import compact"><div><label class="check-row"><input id="autoCexEnabled" type="checkbox"> <strong>CEX</strong></label><small>Ticker hoặc watchlist TradingView</small></div><label class="file-button" for="autoCexFile">Nạp .txt</label><input id="autoCexFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
+              <textarea id="autoCexSymbols" rows="5" spellcheck="false" placeholder="BTC, ETH, SOL, MNT, PI"></textarea>
+            </div>
+            <div>
+              <div class="watchlist-import compact"><div><label class="check-row"><input id="autoDexEnabled" type="checkbox"> <strong>DEX</strong></label><small>Bắt buộc chain:token_address</small></div><label class="file-button" for="autoDexFile">Nạp .txt</label><input id="autoDexFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
+              <textarea id="autoDexTokens" rows="5" spellcheck="false" placeholder="base:0x…&#10;solana:…"></textarea>
+            </div>
+          </div>
+          <div class="future-asset"><strong>STOCK · SSI</strong><span>Đã có schema watchlist và lịch riêng; adapter dữ liệu chưa bật.</span></div>
+          <p id="autoFileState" class="file-state"></p>
+        </fieldset>
+
+        <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi tóm tắt khi không có tín hiệu mới</label><label class="check-row"><input id="sendErrors" type="checkbox"> Gửi lỗi lấy dữ liệu</label></div>
+        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><span id="automationState">Chưa lưu thay đổi</span></div>
+        <div id="lastRuns" class="last-runs"></div>
+      </section>
+    </section>
+
+    <p class="note">Indicator chạy trên dữ liệu nến đã đóng. Hãy đối chiếu các tín hiệu đầu tiên với TradingView trước khi dùng tự động.</p>
+  </main>
+  <script type="module" src="app.js"></script>
+</body></html>

@@ -1,0 +1,37 @@
+# Tự động hóa và Telegram
+
+Phiên bản 2.1 đã có scheduler, cấu hình watchlist qua giao diện, gửi Telegram, chạy thử thủ công và chống gửi trùng. Chỉ bật lịch thật sau khi tín hiệu CEX/DEX đã được đối chiếu ổn định.
+
+Phiên bản 2.2 đổi tên ứng dụng thành **Trading Signal**, thêm schema đa tài sản và các vùng cấu hình `stocks`, `stockDaily`, `stockWeekly`. Các vùng Stock vẫn tắt cho đến khi có adapter dữ liệu SSI và kiểm thử dữ liệu điều chỉnh.
+
+Phiên bản 2.3 bổ sung đăng nhập quản trị, session cookie bảo mật, giới hạn đăng nhập sai, kiểm tra same-origin và khóa khởi động production nếu thiếu secret.
+
+Phiên bản 2.4 cập nhật Pine `SMC SCAPLING` snapshot `b042e8f7…`, bổ sung TL1, TS, nhánh fake-rug còn thiếu và nhóm EXIT/TREND.
+
+## Scheduler
+
+- D1: chạy sau khi nến UTC đóng và dữ liệu sàn cập nhật.
+- W1: chạy sau khi tuần UTC đóng vào thứ Hai.
+- Gọi lại các hàm scan hiện có; không viết lại indicator.
+- Giới hạn tốc độ riêng cho GeckoTerminal/CoinGecko.
+
+## Telegram Bot
+
+- Cấu hình qua biến môi trường, không lưu token trong mã nguồn.
+- Chỉ gửi BUY/SELL/BOTH; tùy chọn gửi bản tóm tắt NONE/ERROR.
+- Nội dung gồm tài sản, nguồn/sàn, timeframe, loại tín hiệu, giá đóng, ngày nến và pool/contract nếu là DEX.
+- Lưu khóa duy nhất `asset + timeframe + candleOpenTime + signal` để không gửi trùng.
+- Có nút kiểm tra thủ công và hiển thị trạng thái lần chạy gần nhất.
+
+## Cấu hình có thể thay đổi
+
+- Watchlist CEX và DEX được nạp từ `.txt`, chỉnh trực tiếp và lưu lại trên giao diện.
+- Giờ D1, ngày/giờ W1, Chat ID và tùy chọn báo lỗi/tóm tắt đều sửa được ở lần sau.
+- Token bot luôn ở `.env`; giao diện không đọc ngược hoặc hiển thị token.
+
+## Điều kiện bắt đầu
+
+- Hoàn tất đối chiếu một tập tín hiệu BUY và SELL với TradingView.
+- Nạp và lưu danh sách Watchlist thực tế.
+- Cấu hình CoinGecko Analyst key nếu cần DEX W1.
+- Người dùng tạo Telegram Bot và cung cấp token/chat ID qua biến môi trường trên máy chạy.

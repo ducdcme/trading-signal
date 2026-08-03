@@ -1,0 +1,17 @@
+{
+  "quoteAsset": "USDT",
+  "quotePriority": ["USDT", "USDC"],
+  "interval": "1d",
+  "exchangePriority": ["BINANCE", "BYBIT", "OKX"],
+  "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"],
+  "candleLimit": 1000,
+  "requestConcurrency": 3,
+  "dex": {
+    "quotePriority": ["USDT", "USDC"],
+    "minimumLiquidityUsd": 100000,
+    "poolPages": 3,
+    "requestIntervalMs": 6500,
+    "cacheMinutes": 10,
+    "networks": ["solana", "eth", "base", "bsc", "arbitrum", "polygon_pos", "avax", "optimism"]
+  }
+}
