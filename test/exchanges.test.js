@@ -23,6 +23,14 @@ test("normalizes reverse-ordered Bybit daily candles", async () => {
   assert.ok(candles[0].openTime < candles[1].openTime);
 });
 
+test("classifies Bybit Not supported symbols as a missing market", async () => {
+  globalThis.fetch = async () => response({ retCode: 10001, retMsg: "Not supported symbols", result: {} });
+  await assert.rejects(
+    () => fetchBybitClosedDailyCandles("BOBOUSDT", 100),
+    error => error.name === "MarketNotFoundError" && /không có cặp Spot/.test(error.message)
+  );
+});
+
 test("uses only confirmed OKX candles", async () => {
   const now = Date.now();
   globalThis.fetch = async () => response({ code: "0", data: [

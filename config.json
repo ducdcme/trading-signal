@@ -1,6 +1,6 @@
 {
   "quoteAsset": "USDT",
-  "quotePriority": ["USDT", "USDC"],
+  "quotePriority": ["USDT", "USDC", "FDUSD"],
   "interval": "1d",
   "exchangePriority": ["BINANCE", "OKX", "BYBIT", "BITGET", "KUCOIN", "GATE", "MEXC"],
   "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"],

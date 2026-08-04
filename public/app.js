@@ -69,10 +69,10 @@ function parseDexTokens(text) {
 
 function renderSummary(target, rows) {
   const counts = rows.reduce((all, row) => ({ ...all, [row.status]: (all[row.status] ?? 0) + 1 }), {});
-  target.innerHTML = ["BUY", "SELL", "BOTH", "NONE", "ERROR"].filter(key => counts[key]).map(key => `<div class="card ${key.toLowerCase()}"><b>${counts[key]}</b><span>${key}</span></div>`).join("");
+  target.innerHTML = ["BUY", "SELL", "BOTH", "NONE", "SKIPPED", "ERROR"].filter(key => counts[key]).map(key => `<div class="card ${key.toLowerCase()}"><b>${counts[key]}</b><span>${key}</span></div>`).join("");
 }
 
-const order = { BOTH: 0, BUY: 1, SELL: 2, NONE: 3, ERROR: 4 };
+const order = { BOTH: 0, BUY: 1, SELL: 2, NONE: 3, SKIPPED: 4, ERROR: 5 };
 let lastCexResults = [];
 
 $("#scan").addEventListener("click", async () => {
@@ -85,7 +85,7 @@ $("#scan").addEventListener("click", async () => {
     renderSummary($("#summary"), data.results);
     lastCexResults = data.results.sort((a, b) => order[a.status] - order[b.status]);
     $("#results").innerHTML = lastCexResults.map((row, index) => {
-      const focusButtons = data.timeframe === "1D" && row.status !== "ERROR" ? `${row.buyTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
+      const focusButtons = data.timeframe === "1D" && ["BUY", "SELL", "BOTH"].includes(row.status) ? `${row.buyTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
       return `<tr><td><strong>${h(row.instrumentId || row.requestedSymbol)}</strong></td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td><td class="row-actions">${focusButtons}</td></tr>`;
     }).join("");
     $("#state").textContent = `Đã quét ${data.results.length} cặp · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;

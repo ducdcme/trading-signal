@@ -1,13 +1,10 @@
 export function normalizeSymbol(value) {
   let symbol = value.trim().toUpperCase();
   if (!symbol) return "";
-  let exchange = "";
   if (symbol.includes(":")) {
-    [exchange, symbol] = symbol.split(":", 2);
-    exchange = exchange.replace(/[^A-Z0-9]/g, "");
+    [, symbol] = symbol.split(":", 2);
   }
-  symbol = symbol.replace(/[^A-Z0-9]/g, "").replace(/(?:USDT|USDC)$/, "");
-  return exchange ? `${exchange}:${symbol}` : symbol;
+  return symbol.replace(/[^A-Z0-9]/g, "").replace(/(?:FDUSD|USDT|USDC)$/, "");
 }
 
 export function parseSymbols(value) {

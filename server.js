@@ -14,6 +14,7 @@ import { selectDeliverySignals } from "./lib/automation-signals.js";
 import { clearSessionCookie, createSessionToken, isSameOrigin, loadAuthConfig, LoginRateLimiter, parseCookies, sessionCookie, verifyPassword, verifySessionToken } from "./lib/auth.js";
 import { deleteFocusEntry, extendFocusEntry, loadFocusList, upsertFocusEntry } from "./lib/focus-store.js";
 import { parseInstrument } from "./lib/instruments.js";
+import { MarketNotFoundError } from "./lib/exchange-errors.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -84,7 +85,10 @@ async function mapLimited(items, limit, fn) {
 
 function normalizeInstruments(input) {
   const base = Array.isArray(input) ? input : config.symbols;
-  return parseInstruments(base);
+  // CEX watchlists are discovery lists. TradingView exports include the chart
+  // exchange (for example BINANCE:BLZUSDT), but that must not pin a delisted
+  // market and bypass the configured exchange priority.
+  return parseInstruments(base).map(item => parseInstrument(item.asset));
 }
 
 function analyzeCandles(dailyCandles, timeframe) {
@@ -105,7 +109,8 @@ async function scan(instruments, timeframe) {
       const selected = resolved.instrument;
       return { assetType: "CEX", asset: selected.asset, symbol: selected.key, requestedSymbol: instrument.key, exchange: selected.exchange, instrumentId: selected.instrumentId, timeframe, ...analyzeCandles(resolved.candles, timeframe) };
     } catch (error) {
-      return { assetType: "CEX", symbol: instrument.key, exchange: instrument.exchange, instrumentId: instrument.instrumentId, timeframe, status: "ERROR", error: error.message };
+      const status = error instanceof MarketNotFoundError ? "SKIPPED" : "ERROR";
+      return { assetType: "CEX", symbol: instrument.key, exchange: instrument.exchange, instrumentId: instrument.instrumentId, timeframe, status, error: error.message };
     }
   });
 }

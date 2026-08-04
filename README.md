@@ -51,7 +51,7 @@ Có ba cách thêm coin:
 "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"]
 ```
 
-Chỉ cần nhập tên coin, ví dụ `MNT` hoặc `PI`. Với mỗi sàn, tool ưu tiên USDT rồi fallback USDC:
+Chỉ cần nhập tên coin, ví dụ `MNT` hoặc `PI`. Tool ưu tiên quote `USDT`, sau đó `USDC`; riêng Binance thử thêm `FDUSD`:
 
 1. Binance
 2. OKX
@@ -61,9 +61,9 @@ Chỉ cần nhập tên coin, ví dụ `MNT` hoặc `PI`. Với mỗi sàn, tool
 6. Gate.io
 7. MEXC
 
-Mỗi coin chỉ được giữ một lần. Hệ thống chọn cặp Spot USDT đầu tiên tồn tại theo thứ tự trên rồi dừng; chỉ thử USDC khi cùng sàn không có USDT. Nếu cặp tồn tại nhưng chưa đủ nến, hệ thống báo thiếu dữ liệu và không đổi sang sàn thấp hơn. Nếu API sàn đang lỗi, hệ thống cũng dừng để tránh âm thầm trộn dữ liệu giữa các sàn. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
+Mỗi coin chỉ được giữ một lần. Hệ thống tải catalog Spot đang giao dịch của từng sàn, chọn cặp đầu tiên theo thứ tự sàn và quote rồi mới lấy nến. Cặp đã delist không được chọn dù API vẫn còn trả nến lịch sử. Nếu nến cuối cũ quá hai chu kỳ, hệ thống loại kết quả thay vì phát tín hiệu từ dữ liệu chết. Nếu cặp đang giao dịch nhưng chưa đủ nến, hệ thống báo thiếu dữ liệu và không đổi sang sàn thấp hơn. Nếu API sàn đang lỗi, hệ thống cũng dừng để tránh âm thầm trộn dữ liệu giữa các sàn. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
 
-Nếu muốn ép dùng một sàn, nhập `BYBIT:MNT`, `OKX:PI`, `BITGET:BTC`, `KUCOIN:BTC`, `GATE:BTC`, `MEXC:BTC` hoặc `BINANCE:BTC`.
+Tiền tố sàn trong file TradingView được bỏ khi nạp để hệ thống luôn áp dụng `exchangePriority`. Danh sách theo dõi 7 ngày vẫn giữ đúng sàn và cặp đã được chọn tại thời điểm bạn thêm thủ công.
 
 Các API đều là API dữ liệu thị trường công khai, không cần API key:
 

@@ -100,7 +100,7 @@ Nếu `git status --short` hiển thị file source đã sửa trực tiếp tr�
 
 Sau cập nhật, đăng nhập <https://trading.abc.net> rồi kiểm tra theo thứ tự:
 
-1. `/api/health` trả phiên bản `2.5.0`.
+1. `/api/health` trả phiên bản `2.5.2`.
 2. Quét thử BTC trên D1 và xác nhận sàn là Binance.
 3. Chọn một tín hiệu D1 và thêm vào **Theo dõi 7 ngày**.
 4. Bấm **Quét điểm vào ngay**.
