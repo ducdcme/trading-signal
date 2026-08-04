@@ -53,25 +53,46 @@ Có ba cách thêm coin:
 
 Chỉ cần nhập tên coin, ví dụ `MNT` hoặc `PI`. Với mỗi sàn, tool ưu tiên USDT rồi fallback USDC:
 
-1. Binance: `<COIN>USDT` → `<COIN>USDC`
-2. Bybit: `<COIN>USDT` → `<COIN>USDC`
-3. OKX: `<COIN>-USDT` → `<COIN>-USDC`
+1. Binance
+2. OKX
+3. Bybit
+4. Bitget
+5. KuCoin
+6. Gate.io
+7. MEXC
 
-Sàn đầu tiên có cặp Spot và ít nhất 100 nến ngày đã đóng sẽ được sử dụng. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
+Mỗi coin chỉ được giữ một lần. Hệ thống chọn cặp Spot USDT đầu tiên tồn tại theo thứ tự trên rồi dừng; chỉ thử USDC khi cùng sàn không có USDT. Nếu cặp tồn tại nhưng chưa đủ nến, hệ thống báo thiếu dữ liệu và không đổi sang sàn thấp hơn. Nếu API sàn đang lỗi, hệ thống cũng dừng để tránh âm thầm trộn dữ liệu giữa các sàn. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
 
-Nếu muốn ép dùng một sàn, nhập `BYBIT:MNT`, `OKX:PI` hoặc `BINANCE:BTC`.
+Nếu muốn ép dùng một sàn, nhập `BYBIT:MNT`, `OKX:PI`, `BITGET:BTC`, `KUCOIN:BTC`, `GATE:BTC`, `MEXC:BTC` hoặc `BINANCE:BTC`.
 
 Các API đều là API dữ liệu thị trường công khai, không cần API key:
 
 - Binance: `/api/v3/klines`
-- Bybit V5: `/v5/market/kline`, `category=spot`, `interval=D`
-- OKX V5: `/api/v5/market/history-candles`, `bar=1Dutc`
+- OKX V5: `/api/v5/market/history-candles`
+- Bybit V5: `/v5/market/kline`, `category=spot`
+- Bitget V2: `/api/v2/spot/market/candles`
+- KuCoin: `/api/v1/market/candles`
+- Gate.io V4: `/api/v4/spot/candlesticks`
+- MEXC V3: `/api/v3/klines`
 
 Quyền truy cập Bybit hoặc OKX có thể phụ thuộc mạng và khu vực của máy đang chạy tool. Khi một API bị chặn, kết quả sẽ ghi rõ lỗi của từng sàn đã thử.
 
 Khi chọn file `.txt`, danh sách trong file sẽ thay nội dung ô nhập. Sau đó vẫn có thể sửa, xóa hoặc thêm coin mới trước khi bấm **Quét tín hiệu**. File chỉ được đọc trong trình duyệt và không được tải lên máy chủ khác.
 
 Có thể thử ngay bằng file `sample-watchlist.txt` đi kèm dự án.
+
+## Theo dõi điểm vào 7 ngày
+
+Scanner D1 chỉ phát hiện và hiển thị tín hiệu; không tự đưa mọi tín hiệu vào danh sách theo dõi. Sau khi tự đánh giá, bấm **+ BUY** hoặc **+ SELL** tại đúng dòng D1 cần quan sát. Khung mặc định là 1H và có thể đổi sang 4H trước khi thêm.
+
+- D1 BUY chỉ tìm tín hiệu BUY trên khung nhỏ.
+- D1 SELL chỉ tìm tín hiệu SELL trên khung nhỏ.
+- Luôn dùng đúng sàn đã được chọn ở D1.
+- Mỗi coin chỉ có một mục theo dõi; thêm lại sẽ cập nhật chiều, khung và bắt đầu lại 7 ngày.
+- Hết 7 ngày mục tự ngừng quét; có thể gia hạn hoặc xóa thủ công.
+- Scheduler quét vào phút thứ 5 mỗi giờ theo mặc định và chỉ gửi khi nến đã đóng có tín hiệu đúng chiều.
+
+Danh sách nằm tại `DATA_DIR/focus-watchlist.json`, tách khỏi source và không bị ảnh hưởng khi cập nhật bằng Git.
 
 ## DEX Crypto
 
@@ -106,7 +127,7 @@ Tab giao diện đã được chuẩn bị. Dữ liệu dự kiến dùng SSI Fa
 
 ## Kiến trúc
 
-Tool không tự động điều khiển TradingView. Công thức Pine đã được chuyển sang JavaScript và chạy trên dữ liệu nến lấy trực tiếp từ API của Binance, Bybit, OKX hoặc GeckoTerminal. TradingView chỉ dùng để đối chiếu một số tín hiệu đầu tiên nhằm xác nhận hai cách tính cho kết quả giống nhau.
+Tool không tự động điều khiển TradingView. Công thức Pine đã được chuyển sang JavaScript và chạy trên dữ liệu nến lấy trực tiếp từ API của bảy sàn CEX hoặc GeckoTerminal. TradingView chỉ dùng để đối chiếu một số tín hiệu đầu tiên nhằm xác nhận hai cách tính cho kết quả giống nhau.
 
 Khi có PineScript mới, phần chuyển đổi tín hiệu sẽ được cập nhật riêng trong `lib/indicator.js`; cấu hình API và watchlist không cần thay đổi.
 

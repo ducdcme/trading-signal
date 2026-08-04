@@ -79,12 +79,30 @@ Sau đó bỏ dấu `#` ở hai dòng `auth_basic` trong file Nginx.
 
 ## 4. Cập nhật phiên bản sau
 
+Lần đầu nâng từ 2.4 lên 2.5, nên sao lưu dữ liệu runtime trước:
+
 ```bash
 cd /var/www/trading-signal
+cp /var/lib/trading-signal/automation.json /var/lib/trading-signal/automation.json.bak 2>/dev/null || true
+cp /var/lib/trading-signal/automation-state.json /var/lib/trading-signal/automation-state.json.bak 2>/dev/null || true
+git status --short
 git pull --ff-only
 npm test
 npm run check
 pm2 reload trading-signal
+curl http://127.0.0.1:3210/api/health
+pm2 logs trading-signal --lines 100
 ```
 
-Watchlist và lịch sử Telegram nằm trong `DATA_DIR`, nên không bị ảnh hưởng bởi `git pull`.
+Nếu `git status --short` hiển thị file source đã sửa trực tiếp trên server, dừng trước `git pull` và lưu lại phần sửa đó. Không dùng `git reset --hard`.
+
+`.env`, watchlist, lịch sử Telegram và danh sách theo dõi 7 ngày nằm ngoài source trong `DATA_DIR`, nên không bị ảnh hưởng bởi `git pull`. Schema cấu hình cũ được chuyển sang schema v3 khi đọc; không cần xóa hoặc tạo lại `automation.json`.
+
+Sau cập nhật, đăng nhập <https://trading.abc.net> rồi kiểm tra theo thứ tự:
+
+1. `/api/health` trả phiên bản `2.5.0`.
+2. Quét thử BTC trên D1 và xác nhận sàn là Binance.
+3. Chọn một tín hiệu D1 và thêm vào **Theo dõi 7 ngày**.
+4. Bấm **Quét điểm vào ngay**.
+5. Kiểm tra lịch khung nhỏ bật tại phút thứ 5 mỗi giờ.
+6. Chỉ sau đó mới để scheduler chạy tự động.

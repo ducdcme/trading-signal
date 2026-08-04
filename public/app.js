@@ -73,6 +73,7 @@ function renderSummary(target, rows) {
 }
 
 const order = { BOTH: 0, BUY: 1, SELL: 2, NONE: 3, ERROR: 4 };
+let lastCexResults = [];
 
 $("#scan").addEventListener("click", async () => {
   const button = $("#scan");
@@ -82,10 +83,26 @@ $("#scan").addEventListener("click", async () => {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     renderSummary($("#summary"), data.results);
-    $("#results").innerHTML = data.results.sort((a, b) => order[a.status] - order[b.status]).map(row => `<tr><td><strong>${h(row.instrumentId || row.requestedSymbol)}</strong></td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td></tr>`).join("");
+    lastCexResults = data.results.sort((a, b) => order[a.status] - order[b.status]);
+    $("#results").innerHTML = lastCexResults.map((row, index) => {
+      const focusButtons = data.timeframe === "1D" && row.status !== "ERROR" ? `${row.buyTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
+      return `<tr><td><strong>${h(row.instrumentId || row.requestedSymbol)}</strong></td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td><td class="row-actions">${focusButtons}</td></tr>`;
+    }).join("");
     $("#state").textContent = `Đã quét ${data.results.length} cặp · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
   } catch (error) { $("#state").textContent = `Lỗi: ${error.message}`; }
   finally { button.disabled = false; }
+});
+
+$("#results").addEventListener("click", async event => {
+  const button = event.target.closest("[data-focus-index]");
+  if (!button) return;
+  const row = lastCexResults[Number(button.dataset.focusIndex)];
+  button.disabled = true;
+  try {
+    await api("/api/focus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asset: row.asset, exchange: row.exchange, instrumentId: row.instrumentId, direction: button.dataset.direction, timeframe: $("#focusDefaultTimeframe").value }) });
+    button.textContent = "Đã thêm";
+    await loadFocusList();
+  } catch (error) { button.textContent = `Lỗi: ${error.message}`; button.disabled = false; }
 });
 
 $("#scanDex").addEventListener("click", async () => {
@@ -108,8 +125,8 @@ $("#scanDex").addEventListener("click", async () => {
 });
 
 function renderLastRuns(lastRuns = {}) {
-  const rows = ["crypto:1D", "crypto:1W"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
-    const timeframe = run.timeframe || key.slice(7);
+  const rows = ["crypto:1D", "crypto:1W", "focus"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
+    const timeframe = key === "focus" ? "Theo dõi 1H/4H" : (run.timeframe || key.slice(7));
     const detail = run.status === "ERROR" ? `Lỗi: ${run.error}` : `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
@@ -125,6 +142,8 @@ function fillAutomation(data) {
   $("#weeklyEnabled").checked = settings.schedules.cryptoWeekly.enabled;
   $("#weeklyDay").value = String(settings.schedules.cryptoWeekly.day);
   $("#weeklyTime").value = settings.schedules.cryptoWeekly.time;
+  $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
+  $("#focusMinute").value = String(settings.schedules.focusScan.minute);
   $("#sendNoSignalSummary").checked = settings.telegram.sendNoSignalSummary;
   $("#sendErrors").checked = settings.telegram.sendErrors;
   $("#autoCexEnabled").checked = settings.assets.cex.enabled;
@@ -139,7 +158,7 @@ function fillAutomation(data) {
 
 function collectAutomation() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     enabled: $("#automationEnabled").checked,
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
@@ -154,6 +173,7 @@ function collectAutomation() {
     schedules: {
       cryptoDaily: { enabled: $("#dailyEnabled").checked, time: $("#dailyTime").value },
       cryptoWeekly: { enabled: $("#weeklyEnabled").checked, day: Number($("#weeklyDay").value), time: $("#weeklyTime").value },
+      focusScan: { enabled: $("#focusScheduleEnabled").checked, minute: Number($("#focusMinute").value) },
       stockDaily: automationSnapshot.settings.schedules.stockDaily,
       stockWeekly: automationSnapshot.settings.schedules.stockWeekly
     }
@@ -175,6 +195,47 @@ async function saveAutomationSettings(showMessage = true) {
 }
 
 fillAutomation(automationSnapshot);
+
+function remainingText(expiresAt, now = Date.now()) {
+  const milliseconds = expiresAt - now;
+  if (milliseconds <= 0) return "Đã hết hạn";
+  const days = Math.floor(milliseconds / 86_400_000);
+  const hours = Math.ceil((milliseconds % 86_400_000) / 3_600_000);
+  return days ? `${days} ngày ${hours} giờ` : `${hours} giờ`;
+}
+
+async function loadFocusList() {
+  const data = await api("/api/focus");
+  $("#focusCount").textContent = `${data.items.filter(item => item.expiresAt > data.now).length} coin đang chạy`;
+  $("#focusResults").innerHTML = data.items.length ? data.items.sort((a, b) => a.expiresAt - b.expiresAt).map(item => {
+    const active = item.expiresAt > data.now;
+    return `<tr><td><strong>${h(item.asset)}</strong></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${h(item.direction.toLowerCase())}">${h(item.direction)}</span></td><td>${h(item.timeframe)}</td><td class="${active ? "active-time" : "expired"}">${h(remainingText(item.expiresAt, data.now))}</td><td class="row-actions"><button class="secondary focus-action" data-extend="${h(item.asset)}">+7 ngày</button><button class="focus-action sell-action" data-delete="${h(item.asset)}">Xóa</button></td></tr>`;
+  }).join("") : `<tr><td colspan="6">Chưa có coin nào. Sau khi quét D1, bấm “+ BUY” hoặc “+ SELL” ở tín hiệu bạn muốn theo dõi.</td></tr>`;
+}
+
+$("#focusResults").addEventListener("click", async event => {
+  const extend = event.target.closest("[data-extend]");
+  const remove = event.target.closest("[data-delete]");
+  if (!extend && !remove) return;
+  const button = extend || remove;
+  button.disabled = true;
+  try {
+    if (extend) await api(`/api/focus/${encodeURIComponent(extend.dataset.extend)}/extend`, { method: "POST" });
+    else await api(`/api/focus/${encodeURIComponent(remove.dataset.delete)}`, { method: "DELETE" });
+    await loadFocusList();
+  } catch (error) { $("#focusState").textContent = `Lỗi: ${error.message}`; button.disabled = false; }
+});
+
+$("#runFocusNow").addEventListener("click", async event => {
+  const button = event.currentTarget; button.disabled = true; $("#focusState").textContent = "Đang quét 1H/4H…";
+  try {
+    const result = await api("/api/focus/run", { method: "POST" });
+    $("#focusState").textContent = `Đã quét ${result.total} coin · khớp ${result.matchedSignals} · gửi ${result.sentSignals} cảnh báo.`;
+  } catch (error) { $("#focusState").textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
+await loadFocusList();
 
 $("#autoCexFile").addEventListener("change", () => importTextFile($("#autoCexFile"), $("#autoFileState"), (text, name) => {
   const symbols = parseSymbols(text);

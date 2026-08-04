@@ -13,13 +13,14 @@ test("migrates version 1 automation settings to the multi-asset schema", () => {
     cexSymbols: ["BTC", "BTC", "ETH"],
     dexTokens: [{ network: "BASE", tokenAddress: "0xabc" }]
   });
-  assert.equal(settings.schemaVersion, 2);
+  assert.equal(settings.schemaVersion, 3);
   assert.equal(settings.telegram.chatId, "-100123");
   assert.deepEqual(settings.assets.cex.watchlist, ["BTC", "ETH"]);
   assert.equal(settings.assets.dex.watchlist[0].network, "base");
   assert.equal(settings.schedules.cryptoWeekly.day, 1);
   assert.equal(settings.assets.stocks.enabled, false);
   assert.deepEqual(settings.assets.stocks.watchlist, []);
+  assert.deepEqual(settings.schedules.focusScan, { enabled: true, minute: 5 });
 });
 
 test("keeps stock placeholders and independent schedules in version 2", () => {

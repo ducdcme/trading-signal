@@ -9,6 +9,7 @@
     <header><div><p class="eyebrow">MULTI-ASSET SIGNAL SCANNER</p><h1>Trading Signal</h1><p>CEX, DEX và chứng khoán Việt Nam trên cùng một công cụ.</p></div><div class="header-actions"><span class="live">Closed candles only</span><button id="logout" class="secondary" type="button">Đăng xuất</button></div></header>
     <nav class="tabs" aria-label="Loại tài sản">
       <button class="tab active" data-tab="cex">CEX Crypto</button>
+      <button class="tab" data-tab="focus">Theo dõi 7 ngày</button>
       <button class="tab" data-tab="dex">DEX Crypto</button>
       <button class="tab" data-tab="stocks">VN Stocks</button>
       <button class="tab" data-tab="automation">Tự động & Telegram</button>
@@ -16,14 +17,23 @@
 
     <section class="tab-panel active" id="panel-cex">
       <section class="controls">
-        <div class="watchlist-import"><div><strong>Watchlist CEX</strong><small>Chỉ cần ticker; tự tìm Binance → Bybit → OKX.</small></div><label class="file-button" for="watchlistFile">Nhập file .txt</label><input id="watchlistFile" type="file" accept=".txt,text/plain"></div>
+        <div class="watchlist-import"><div><strong>Watchlist CEX</strong><small>Mỗi coin một lần: Binance → OKX → Bybit → Bitget → KuCoin → Gate.io → MEXC.</small></div><label class="file-button" for="watchlistFile">Nhập file .txt</label><input id="watchlistFile" type="file" accept=".txt,text/plain"></div>
         <p id="fileState" class="file-state"></p>
         <label for="symbols">Danh sách coin <small>cách nhau bằng dấu phẩy hoặc xuống dòng</small></label>
         <textarea id="symbols" rows="3" spellcheck="false"></textarea>
         <div class="actions"><select id="cexTimeframe" aria-label="Khung thời gian"><option value="1D">D1</option><option value="1W">W1</option></select><button id="scan">Quét CEX</button><span id="state">Sẵn sàng</span></div>
       </section>
       <section class="summary" id="summary"></section>
-      <section class="table-wrap"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Giá đóng</th><th>Nến</th></tr></thead><tbody id="results"></tbody></table></section>
+      <section class="table-wrap"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Giá đóng</th><th>Nến</th><th>Theo dõi</th></tr></thead><tbody id="results"></tbody></table></section>
+    </section>
+
+    <section class="tab-panel" id="panel-focus">
+      <section class="controls">
+        <div class="section-heading"><div><p class="eyebrow">ENTRY FOCUS WATCHLIST</p><h2>Theo dõi điểm vào trong 7 ngày</h2><p>Chỉ các tín hiệu D1 bạn tự chọn mới được đưa vào đây. Hệ thống giữ nguyên sàn đã phát tín hiệu D1.</p></div><span id="focusCount" class="status-pill">0 coin</span></div>
+        <div class="focus-toolbar"><label>Khung mặc định khi thêm <select id="focusDefaultTimeframe"><option value="1H">1H</option><option value="4H">4H</option></select></label><button id="runFocusNow" class="secondary">Quét điểm vào ngay</button><span id="focusState">Sẵn sàng</span></div>
+      </section>
+      <section class="table-wrap focus-table"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Chiều D1</th><th>Khung tìm điểm vào</th><th>Còn lại</th><th>Thao tác</th></tr></thead><tbody id="focusResults"></tbody></table></section>
+      <p class="note">Hết 7 ngày, coin tự ngừng quét. Bạn có thể gia hạn thêm 7 ngày hoặc xóa thủ công.</p>
     </section>
 
     <section class="tab-panel" id="panel-dex">
@@ -68,6 +78,7 @@
             <label class="check-row"><input id="automationEnabled" type="checkbox"> Bật chạy tự động</label>
             <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><input id="dailyTime" type="time"><span>mỗi ngày</span></div>
             <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div>
+            <div class="schedule-row"><label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> 1H/4H</label><input id="focusMinute" type="number" min="0" max="59"><span>phút thứ … mỗi giờ</span></div>
             <small>Múi giờ cố định: Asia/Ho_Chi_Minh. Mặc định 07:10, sau lúc nến UTC đóng.</small>
           </fieldset>
         </div>

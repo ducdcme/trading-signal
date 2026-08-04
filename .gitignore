@@ -3,3 +3,4 @@ node_modules/
 *.log
 data/automation.json
 data/automation-state.json
+data/focus-watchlist.json

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseInstruments } from "./lib/instruments.js";
-import { resolveAndFetchClosedDailyCandles } from "./lib/market.js";
+import { fetchFromExchange, resolveAndFetchClosedCandles } from "./lib/market.js";
 import { calculateSignals } from "./lib/indicator.js";
 import { candlesForTimeframe } from "./lib/candles.js";
 import { fetchDexDailyCandles } from "./lib/geckoterminal.js";
@@ -12,6 +12,8 @@ import { loadAutomation, loadAutomationState, localClock, normalizeAutomation, s
 import { findTelegramChats, sendTelegramText } from "./lib/telegram.js";
 import { selectDeliverySignals } from "./lib/automation-signals.js";
 import { clearSessionCookie, createSessionToken, isSameOrigin, loadAuthConfig, LoginRateLimiter, parseCookies, sessionCookie, verifyPassword, verifySessionToken } from "./lib/auth.js";
+import { deleteFocusEntry, extendFocusEntry, loadFocusList, upsertFocusEntry } from "./lib/focus-store.js";
+import { parseInstrument } from "./lib/instruments.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -22,6 +24,7 @@ const host = process.env.HOST || "127.0.0.1";
 const dataDir = resolve(root, process.env.DATA_DIR || "data");
 const automationPath = join(dataDir, "automation.json");
 const automationStatePath = join(dataDir, "automation-state.json");
+const focusPath = join(dataDir, "focus-watchlist.json");
 const startedAt = Date.now();
 const production = process.env.NODE_ENV === "production";
 const auth = loadAuthConfig();
@@ -97,12 +100,24 @@ function analyzeCandles(dailyCandles, timeframe) {
 async function scan(instruments, timeframe) {
   return mapLimited(instruments, config.requestConcurrency, async instrument => {
     try {
-      const minimumDaily = timeframe === "1W" ? 700 : 100;
-      const resolved = await resolveAndFetchClosedDailyCandles(instrument, config.candleLimit, config.exchangePriority, minimumDaily, config.quotePriority);
+      const sourceTimeframe = timeframe === "1W" ? "1D" : timeframe;
+      const resolved = await resolveAndFetchClosedCandles(instrument, sourceTimeframe, config.candleLimit, config.exchangePriority, config.quotePriority);
       const selected = resolved.instrument;
-      return { assetType: "CEX", symbol: selected.key, requestedSymbol: instrument.key, exchange: selected.exchange, instrumentId: selected.instrumentId, timeframe, ...analyzeCandles(resolved.candles, timeframe) };
+      return { assetType: "CEX", asset: selected.asset, symbol: selected.key, requestedSymbol: instrument.key, exchange: selected.exchange, instrumentId: selected.instrumentId, timeframe, ...analyzeCandles(resolved.candles, timeframe) };
     } catch (error) {
       return { assetType: "CEX", symbol: instrument.key, exchange: instrument.exchange, instrumentId: instrument.instrumentId, timeframe, status: "ERROR", error: error.message };
+    }
+  });
+}
+
+async function scanFocusItems(items) {
+  return mapLimited(items, config.requestConcurrency, async item => {
+    try {
+      const instrument = parseInstrument(`${item.exchange}:${item.instrumentId}`);
+      const candles = await fetchFromExchange(instrument, item.timeframe, Math.min(config.candleLimit, 1000));
+      return { assetType: "FOCUS", symbol: item.asset, exchange: item.exchange, instrumentId: item.instrumentId, timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt, ...analyzeCandles(candles, item.timeframe) };
+    } catch (error) {
+      return { assetType: "FOCUS", symbol: item.asset, exchange: item.exchange, instrumentId: item.instrumentId, timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt, status: "ERROR", error: error.message };
     }
   });
 }
@@ -188,6 +203,37 @@ async function runAutomation(timeframe, trigger = "manual") {
   return { timeframe, total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed, errors: rows.filter(row => row.status === "ERROR").length, messageSent: shouldSend };
 }
 
+function focusDirectionMatched(row) {
+  return row.expectedDirection === "BUY" ? Boolean(row.buyTypes?.length) : Boolean(row.sellTypes?.length);
+}
+
+async function runFocusAutomation(trigger = "manual") {
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const now = Date.now();
+  const focus = await loadFocusList(focusPath, now);
+  const active = focus.items.filter(item => item.expiresAt > now);
+  if (!active.length) return { total: 0, matchedSignals: 0, sentSignals: 0, errors: 0, messageSent: false };
+  const rows = await scanFocusItems(active);
+  const matched = rows.filter(focusDirectionMatched).map(row => ({ ...row, status: row.expectedDirection }));
+  const state = await loadAutomationState(automationStatePath);
+  const delivery = selectDeliverySignals(matched, state.sentKeys, "FOCUS", trigger);
+  const errors = rows.filter(row => row.status === "ERROR");
+  const shouldSend = delivery.delivered.length > 0 || (settings.telegram.sendErrors && errors.length > 0);
+  if (shouldSend) {
+    const lines = ["🎯 Trading Signal · Điểm vào khung nhỏ", `Thời điểm: ${new Date().toLocaleString("vi-VN", { timeZone: settings.timezone })}`, ""];
+    for (const row of delivery.delivered) {
+      const types = row.expectedDirection === "BUY" ? row.buyTypes : row.sellTypes;
+      lines.push(`${row.expectedDirection === "BUY" ? "🟢" : "🔴"} ${row.symbol} · ${row.exchange}`, `Điểm vào: ${row.expectedDirection} (${types.join(", ")}) · ${row.timeframe}`, `Giá đóng: ${row.close} · Nến: ${new Date(row.candleOpenTime).toLocaleString("vi-VN", { timeZone: "UTC" })}`, "");
+    }
+    if (settings.telegram.sendErrors) for (const row of errors) lines.push(`⚠️ ${row.symbol} · ${row.exchange}: ${row.error}`);
+    await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, lines.join("\n"));
+  }
+  state.sentKeys = delivery.sentKeys;
+  state.lastRuns = { ...(state.lastRuns || {}), focus: { at: now, assetGroup: "focus", trigger, total: rows.length, detectedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, status: "OK" } };
+  await saveAutomationState(automationStatePath, state);
+  return { total: rows.length, matchedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, messageSent: shouldSend, results: trigger === "manual" ? rows : undefined };
+}
+
 let schedulerBusy = false;
 async function schedulerTick() {
   if (schedulerBusy) return;
@@ -198,7 +244,8 @@ async function schedulerTick() {
     const clock = localClock(new Date(), settings.timezone);
     const jobs = [
       { key: "cryptoDaily", timeframe: "1D", due: settings.schedules.cryptoDaily.enabled && clock.time === settings.schedules.cryptoDaily.time },
-      { key: "cryptoWeekly", timeframe: "1W", due: settings.schedules.cryptoWeekly.enabled && clock.day === settings.schedules.cryptoWeekly.day && clock.time === settings.schedules.cryptoWeekly.time }
+      { key: "cryptoWeekly", timeframe: "1W", due: settings.schedules.cryptoWeekly.enabled && clock.day === settings.schedules.cryptoWeekly.day && clock.time === settings.schedules.cryptoWeekly.time },
+      { key: "focusScan", timeframe: "FOCUS", due: settings.schedules.focusScan.enabled && Number(clock.time.slice(3)) === settings.schedules.focusScan.minute }
     ];
     for (const job of jobs.filter(item => item.due)) {
       const slot = `${clock.date}|${clock.time}`;
@@ -206,10 +253,11 @@ async function schedulerTick() {
       if (state.lastSlots?.[job.key] === slot) continue;
       state.lastSlots = { ...(state.lastSlots || {}), [job.key]: slot };
       await saveAutomationState(automationStatePath, state);
-      try { await runAutomation(job.timeframe, "schedule"); }
+      try { job.timeframe === "FOCUS" ? await runFocusAutomation("schedule") : await runAutomation(job.timeframe, "schedule"); }
       catch (error) {
         const latest = await loadAutomationState(automationStatePath);
-        latest.lastRuns = { ...(latest.lastRuns || {}), [`crypto:${job.timeframe}`]: { at: Date.now(), assetGroup: "crypto", timeframe: job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
+        const runKey = job.timeframe === "FOCUS" ? "focus" : `crypto:${job.timeframe}`;
+        latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup: job.timeframe === "FOCUS" ? "focus" : "crypto", timeframe: job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
         await saveAutomationState(automationStatePath, latest);
         console.error(`Automation ${job.timeframe}: ${error.message}`);
       }
@@ -296,6 +344,19 @@ const server = http.createServer(async (req, res) => {
       const timeframe = request.timeframe === "1W" ? "1W" : "1D";
       return json(res, 200, await runAutomation(timeframe));
     }
+    if (url.pathname === "/api/focus" && req.method === "GET") {
+      const data = await loadFocusList(focusPath);
+      return json(res, 200, { items: data.items, now: Date.now() });
+    }
+    if (url.pathname === "/api/focus" && req.method === "POST") {
+      const request = await readJsonBody(req);
+      const entry = await upsertFocusEntry(focusPath, request);
+      return json(res, 200, { entry, saved: true });
+    }
+    if (url.pathname === "/api/focus/run" && req.method === "POST") return json(res, 200, await runFocusAutomation("manual"));
+    const focusMatch = url.pathname.match(/^\/api\/focus\/([A-Z0-9]+)(?:\/(extend))?$/i);
+    if (focusMatch && req.method === "POST" && focusMatch[2] === "extend") return json(res, 200, { entry: await extendFocusEntry(focusPath, focusMatch[1]) });
+    if (focusMatch && req.method === "DELETE" && !focusMatch[2]) return json(res, (await deleteFocusEntry(focusPath, focusMatch[1])) ? 200 : 404, { deleted: true });
     if (url.pathname === "/api/scan" && req.method === "POST") {
       const request = await readJsonBody(req);
       const timeframe = request.timeframe === "1W" ? "1W" : "1D";

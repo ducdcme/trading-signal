@@ -2,7 +2,7 @@
   "quoteAsset": "USDT",
   "quotePriority": ["USDT", "USDC"],
   "interval": "1d",
-  "exchangePriority": ["BINANCE", "BYBIT", "OKX"],
+  "exchangePriority": ["BINANCE", "OKX", "BYBIT", "BITGET", "KUCOIN", "GATE", "MEXC"],
   "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"],
   "candleLimit": 1000,
   "requestConcurrency": 3,
