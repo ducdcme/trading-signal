@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseInstruments } from "./lib/instruments.js";
-import { fetchFromExchange, resolveAndFetchClosedCandles } from "./lib/market.js";
+import { resolveAndFetchClosedCandles, resolveFocusCandles } from "./lib/market.js";
 import { calculateSignals } from "./lib/indicator.js";
 import { candlesForTimeframe } from "./lib/candles.js";
 import { fetchDexDailyCandles } from "./lib/geckoterminal.js";
@@ -15,6 +15,10 @@ import { clearSessionCookie, createSessionToken, isSameOrigin, loadAuthConfig, L
 import { deleteFocusEntry, extendFocusEntry, loadFocusList, upsertFocusEntry } from "./lib/focus-store.js";
 import { parseInstrument } from "./lib/instruments.js";
 import { MarketNotFoundError } from "./lib/exchange-errors.js";
+import { groupDirectionalSignals, signalDisplayName } from "./lib/signal-groups.js";
+import { ema } from "./lib/ta.js";
+import { fetchMarketQuote } from "./lib/quotes.js";
+import { formatScanErrorSummary } from "./lib/scan-errors.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -96,9 +100,43 @@ function analyzeCandles(dailyCandles, timeframe) {
   if (candles.length < 100) throw new Error(`Không đủ dữ liệu: chỉ có ${candles.length} nến ${timeframe}`);
   const signals = calculateSignals(candles);
   const candle = candles.at(-1);
-  const found = signals.at(-1);
-  const status = found.buyTypes.length && found.sellTypes.length ? "BOTH" : found.buyTypes.length ? "BUY" : found.sellTypes.length ? "SELL" : "NONE";
-  return { status, ...found, close: candle.close, candleOpenTime: candle.openTime, candleCloseTime: candle.closeTime, candleCount: candles.length };
+  const found = groupDirectionalSignals(signals.at(-1));
+  return { ...found, close: candle.close, candleOpenTime: candle.openTime, candleCloseTime: candle.closeTime, candleCount: candles.length };
+}
+
+function chartPayload(candles, instrument, timeframe) {
+  const selected = candlesForTimeframe(candles, timeframe);
+  const generatedAt = Date.now();
+  const closedCount = selected.filter(candle => candle.closeTime < generatedAt).length;
+  const signals = calculateSignals(selected.slice(0, closedCount)).map(groupDirectionalSignals);
+  const closes = selected.map(candle => candle.close);
+  const ema21 = ema(closes, 21);
+  const ema55 = ema(closes, 55);
+  return {
+    generatedAt, closedBarsOnly: false, timeframe,
+    market: { asset: instrument.asset, exchange: instrument.exchange, instrumentId: instrument.instrumentId, quote: instrument.quote },
+    candles: selected.map((candle, index) => ({
+      ...candle, ema21: ema21[index], ema55: ema55[index], isClosed: index < closedCount,
+      ...(signals[index] || { status: "NONE", buySignalTypes: [], sellSignalTypes: [] })
+    }))
+  };
+}
+
+function scanCounts(rows) {
+  return {
+    total: rows.length,
+    skipped: rows.filter(row => row.status === "SKIPPED").length,
+    errors: rows.filter(row => row.status === "ERROR").length
+  };
+}
+
+function logScanErrors(job, rows) {
+  for (const row of rows.filter(item => item.status === "ERROR")) {
+    console.error(JSON.stringify({ timestamp: new Date().toISOString(), job, asset: row.asset || row.symbol || row.instrumentId, exchange: row.exchange, error: row.error }));
+  }
+  for (const row of rows.filter(item => item.fallbackUsed)) {
+    console.warn(JSON.stringify({ timestamp: new Date().toISOString(), job, asset: row.asset || row.symbol || row.instrumentId, exchange: row.exchange, fallbackUsed: true, sourceWarnings: row.sourceWarnings }));
+  }
 }
 
 async function scan(instruments, timeframe) {
@@ -118,9 +156,16 @@ async function scan(instruments, timeframe) {
 async function scanFocusItems(items) {
   return mapLimited(items, config.requestConcurrency, async item => {
     try {
-      const instrument = parseInstrument(`${item.exchange}:${item.instrumentId}`);
-      const candles = await fetchFromExchange(instrument, item.timeframe, Math.min(config.candleLimit, 1000));
-      return { assetType: "FOCUS", symbol: item.asset, exchange: item.exchange, instrumentId: item.instrumentId, timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt, ...analyzeCandles(candles, item.timeframe) };
+      const resolved = await resolveFocusCandles(item, item.timeframe, Math.min(config.candleLimit, 1000), config.exchangePriority, config.quotePriority);
+      const selected = resolved.instrument;
+      return {
+        assetType: "FOCUS", symbol: item.asset, asset: item.asset,
+        exchange: selected.exchange, instrumentId: selected.instrumentId,
+        deliveryExchange: item.exchange, deliveryInstrumentId: item.instrumentId,
+        fallbackUsed: resolved.fallbackUsed, sourceWarnings: resolved.sourceWarnings,
+        timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt,
+        ...analyzeCandles(resolved.candles, item.timeframe)
+      };
     } catch (error) {
       return { assetType: "FOCUS", symbol: item.asset, exchange: item.exchange, instrumentId: item.instrumentId, timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt, status: "ERROR", error: error.message };
     }
@@ -164,24 +209,23 @@ function effectiveAutomation(settings) {
 }
 
 function formatAutomationReport(timeframe, rows, delivery, settings, trigger) {
-  const icons = { BUY: "🟢", SELL: "🔴", BOTH: "🟡", ERROR: "⚠️" };
+  const icons = { BUY: "🟢", SELL: "🔴", BOTH: "🟡" };
   const lines = [`📊 Trading Signal · ${timeframe}`, `Thời điểm: ${new Date().toLocaleString("vi-VN", { timeZone: settings.timezone })}`, `Chế độ: ${trigger === "schedule" ? "Tự động" : "Chạy thủ công"}`, ""];
   for (const row of delivery.delivered) {
-    const types = [...(row.buyTypes || []), ...(row.sellTypes || []), ...(row.warnings || []), ...(row.exitTypes || []), ...(row.trendTypes || [])].join(", ") || row.status;
+    const types = [...(row.buySignalTypes || []), ...(row.sellSignalTypes || []), ...(row.warnings || []), ...(row.trendTypes || [])].map(signalDisplayName).join(", ") || row.status;
     const market = row.assetType === "DEX" ? `${row.network} · ${row.dex || "DEX"}` : row.exchange;
     lines.push(`${icons[row.status] || "•"} ${row.instrumentId || row.symbol} · ${market}`);
     lines.push(`Tín hiệu: ${row.status} (${types}) · Giá đóng: ${row.close ?? "—"}`);
     if (row.assetType === "DEX") lines.push(`Contract: ${row.tokenAddress}`, `Pool: ${row.poolName || row.poolAddress || "—"}`);
     lines.push("");
   }
-  if (settings.telegram.sendErrors) {
-    for (const row of rows.filter(item => item.status === "ERROR")) lines.push(`${icons.ERROR} ${row.instrumentId || row.symbol}: ${row.error}`);
-  }
   const counts = delivery.delivered.reduce((all, row) => ({ ...all, [row.status]: (all[row.status] || 0) + 1 }), {});
-  const errorCount = rows.filter(row => row.status === "ERROR").length;
+  const scan = scanCounts(rows);
   if (delivery.delivered.length === 0 && settings.telegram.sendNoSignalSummary) lines.push(trigger === "schedule" ? "Không có tín hiệu BUY/SELL mới trên nến vừa đóng." : "Không có tín hiệu BUY/SELL trên nến hiện tại.");
   if (delivery.suppressed) lines.push(`Đã bỏ qua ${delivery.suppressed} tín hiệu đã gửi trước đó.`);
-  lines.push(`Đã quét: ${rows.length} · Tín hiệu gửi: BUY ${counts.BUY || 0} · SELL ${counts.SELL || 0} · BOTH ${counts.BOTH || 0} · ERROR ${errorCount}`);
+  lines.push(`Đã quét: ${scan.total} · Tín hiệu gửi: BUY ${counts.BUY || 0} · SELL ${counts.SELL || 0} · BOTH ${counts.BOTH || 0}`);
+  lines.push(`Bỏ qua: ${scan.skipped} · Lỗi: ${scan.errors}`);
+  if (scan.errors) lines.push(`Loại lỗi: ${formatScanErrorSummary(rows)}`);
   return lines.join("\n");
 }
 
@@ -198,8 +242,10 @@ async function runAutomation(timeframe, trigger = "manual") {
 
   const state = await loadAutomationState(automationStatePath);
   const delivery = selectDeliverySignals(rows, state.sentKeys, timeframe, trigger);
+  logScanErrors(`crypto:${timeframe}`, rows);
 
-  const shouldSend = delivery.delivered.length > 0 || (settings.telegram.sendErrors && rows.some(row => row.status === "ERROR")) || settings.telegram.sendNoSignalSummary;
+  const allFailed = rows.length > 0 && rows.every(row => row.status === "ERROR");
+  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
   if (shouldSend) await sendTelegramText(token, settings.telegram.chatId, formatAutomationReport(timeframe, rows, delivery, settings, trigger));
 
   state.sentKeys = delivery.sentKeys;
@@ -209,7 +255,7 @@ async function runAutomation(timeframe, trigger = "manual") {
 }
 
 function focusDirectionMatched(row) {
-  return row.expectedDirection === "BUY" ? Boolean(row.buyTypes?.length) : Boolean(row.sellTypes?.length);
+  return row.expectedDirection === "BUY" ? Boolean(row.buySignalTypes?.length) : Boolean(row.sellSignalTypes?.length);
 }
 
 async function runFocusAutomation(trigger = "manual") {
@@ -223,14 +269,16 @@ async function runFocusAutomation(trigger = "manual") {
   const state = await loadAutomationState(automationStatePath);
   const delivery = selectDeliverySignals(matched, state.sentKeys, "FOCUS", trigger);
   const errors = rows.filter(row => row.status === "ERROR");
-  const shouldSend = delivery.delivered.length > 0 || (settings.telegram.sendErrors && errors.length > 0);
+  logScanErrors("focus", rows);
+  const shouldSend = delivery.delivered.length > 0 || (rows.length > 0 && errors.length === rows.length);
   if (shouldSend) {
     const lines = ["🎯 Trading Signal · Điểm vào khung nhỏ", `Thời điểm: ${new Date().toLocaleString("vi-VN", { timeZone: settings.timezone })}`, ""];
     for (const row of delivery.delivered) {
-      const types = row.expectedDirection === "BUY" ? row.buyTypes : row.sellTypes;
+      const types = row.expectedDirection === "BUY" ? row.buySignalTypes : row.sellSignalTypes;
       lines.push(`${row.expectedDirection === "BUY" ? "🟢" : "🔴"} ${row.symbol} · ${row.exchange}`, `Điểm vào: ${row.expectedDirection} (${types.join(", ")}) · ${row.timeframe}`, `Giá đóng: ${row.close} · Nến: ${new Date(row.candleOpenTime).toLocaleString("vi-VN", { timeZone: "UTC" })}`, "");
     }
-    if (settings.telegram.sendErrors) for (const row of errors) lines.push(`⚠️ ${row.symbol} · ${row.exchange}: ${row.error}`);
+    lines.push(`Đã quét: ${rows.length} · Tín hiệu gửi: ${delivery.delivered.length} · Lỗi: ${errors.length}`);
+    if (errors.length) lines.push(`Loại lỗi: ${formatScanErrorSummary(rows)}`);
     await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, lines.join("\n"));
   }
   state.sentKeys = delivery.sentKeys;
@@ -359,6 +407,37 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { entry, saved: true });
     }
     if (url.pathname === "/api/focus/run" && req.method === "POST") return json(res, 200, await runFocusAutomation("manual"));
+    if (url.pathname === "/api/chart/cex" && req.method === "GET") {
+      const timeframe = ["1H", "4H", "1D", "1W"].includes(url.searchParams.get("timeframe")) ? url.searchParams.get("timeframe") : "1D";
+      const exchange = String(url.searchParams.get("exchange") || "AUTO").toUpperCase();
+      const symbol = String(url.searchParams.get("symbol") || "").trim().toUpperCase();
+      const requestedLimit = Number(url.searchParams.get("limit") || config.candleLimit);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 100), 1000) : config.candleLimit;
+      if (!symbol || !/^[A-Z0-9_-]{2,40}$/.test(symbol)) return json(res, 400, { error: "Mã coin không hợp lệ" });
+      const instrument = parseInstrument(exchange === "AUTO" ? symbol : `${exchange}:${symbol}`);
+      const sourceTimeframe = timeframe === "1W" ? "1D" : timeframe;
+      const resolved = await resolveAndFetchClosedCandles(instrument, sourceTimeframe, limit, config.exchangePriority, config.quotePriority, true);
+      return json(res, 200, chartPayload(resolved.candles, resolved.instrument, timeframe));
+    }
+    if (url.pathname === "/api/market/quotes" && req.method === "POST") {
+      const request = await readJsonBody(req);
+      if (!Array.isArray(request.items) || !request.items.length) return json(res, 400, { error: "Danh sách coin trống" });
+      if (request.items.length > 100) return json(res, 400, { error: "Danh sách chart tối đa 100 coin" });
+      const items = request.items.map(item => {
+        const exchange = String(item.exchange || "AUTO").toUpperCase();
+        const symbol = String(item.symbol || item.instrumentId || "").trim().toUpperCase();
+        if (!symbol || !/^[A-Z0-9_\/-]{1,40}$/.test(symbol)) throw new Error(`Mã coin không hợp lệ: ${symbol || "trống"}`);
+        return { requested: { exchange, symbol }, instrument: parseInstrument(exchange === "AUTO" ? symbol : `${exchange}:${symbol}`) };
+      });
+      const quotes = await mapLimited(items, Math.min(config.requestConcurrency, 5), async item => {
+        try {
+          return { ...(await fetchMarketQuote(item.instrument, { exchangePriority: config.exchangePriority, quotePriority: config.quotePriority })), requested: item.requested };
+        } catch (error) {
+          return { ...item.requested, status: "ERROR", error: error.message };
+        }
+      });
+      return json(res, 200, { generatedAt: Date.now(), quotes });
+    }
     const focusMatch = url.pathname.match(/^\/api\/focus\/([A-Z0-9]+)(?:\/(extend))?$/i);
     if (focusMatch && req.method === "POST" && focusMatch[2] === "extend") return json(res, 200, { entry: await extendFocusEntry(focusPath, focusMatch[1]) });
     if (focusMatch && req.method === "DELETE" && !focusMatch[2]) return json(res, (await deleteFocusEntry(focusPath, focusMatch[1])) ? 200 : 404, { deleted: true });

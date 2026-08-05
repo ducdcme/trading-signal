@@ -8,6 +8,8 @@ Phiên bản 2.3 bổ sung đăng nhập quản trị, session cookie bảo mậ
 
 Phiên bản 2.4 cập nhật Pine `SMC SCAPLING` snapshot `b042e8f7…`, bổ sung TL1, TS, nhánh fake-rug còn thiếu và nhóm EXIT/TREND.
 
+Phiên bản 2.7 hoàn thành SMC giai đoạn 1 trên chart CEX: Swing/Internal Structure, BOS, CHoCH và phân loại xu hướng. Phiên bản 2.8 hoàn thành giai đoạn 2 với Order Block, Fair Value Gap, Equal High/Low và công tắc riêng cho từng lớp; pivot H/L không còn được vẽ. Phiên bản 2.9 hoàn thành giai đoạn 3 với Premium, Discount và Equilibrium 50% dựa trên cặp swing đã xác nhận gần nhất. Engine chỉ phụ thuộc OHLC chuẩn hóa để tái sử dụng khi nối DEX chart và SSI Stock. Bước tiếp theo là kiểm chứng tín hiệu CEX trước khi bật Telegram vận hành thật.
+
 ## Scheduler
 
 - D1: chạy sau khi nến UTC đóng và dữ liệu sàn cập nhật.

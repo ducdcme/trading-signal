@@ -1,5 +1,7 @@
 # Trading Signal
 
+Phiên bản hiện tại: **2.9.1**. Click mã coin trong kết quả quét để gửi cả danh sách sang workspace biểu đồ. Sidebar bên phải cho phép đổi coin tại chỗ, xem giá hiện tại và mức thay đổi so với giá đóng cửa D1 trước, đồng thời thêm/xóa coin mà không ảnh hưởng danh sách quét Telegram. Biểu đồ nến Nhật, EMA xu hướng và tín hiệu Pine hỗ trợ `1H`, `4H`, `D1`, `W1`, nến đang chạy, kéo ngang/dọc, zoom trục X bằng con lăn, co giãn trục Y và khoảng trống tương lai tối đa gần nửa khung. SMC hỗ trợ Swing/Internal Structure, BOS/CHoCH, Order Block, FVG, Equal High/Equal Low và Premium/Discount/Equilibrium trên dữ liệu nến đã đóng; mỗi lớp có thể bật/tắt riêng, EQH/EQL được bật mặc định. Giữ `Shift` và kéo chuột để đo chênh lệch giá/phần trăm, nhấn `Esc` để xóa hình đo. Nhãn thời gian biểu đồ hiển thị theo GMT+7 (Việt Nam).
+
 Ứng dụng quét tín hiệu đa tài sản trên dữ liệu nến đã đóng. Hiện tại CEX Crypto và DEX Crypto hoạt động; kiến trúc đã dành sẵn provider, watchlist và lịch riêng cho chứng khoán Việt Nam.
 
 ## Chạy trên Windows
@@ -61,7 +63,7 @@ Chỉ cần nhập tên coin, ví dụ `MNT` hoặc `PI`. Tool ưu tiên quote `
 6. Gate.io
 7. MEXC
 
-Mỗi coin chỉ được giữ một lần. Hệ thống tải catalog Spot đang giao dịch của từng sàn, chọn cặp đầu tiên theo thứ tự sàn và quote rồi mới lấy nến. Cặp đã delist không được chọn dù API vẫn còn trả nến lịch sử. Nếu nến cuối cũ quá hai chu kỳ, hệ thống loại kết quả thay vì phát tín hiệu từ dữ liệu chết. Nếu cặp đang giao dịch nhưng chưa đủ nến, hệ thống báo thiếu dữ liệu và không đổi sang sàn thấp hơn. Nếu API sàn đang lỗi, hệ thống cũng dừng để tránh âm thầm trộn dữ liệu giữa các sàn. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
+Mỗi coin chỉ được giữ một lần. Hệ thống tải catalog Spot đang giao dịch của từng sàn, chọn cặp đầu tiên theo thứ tự sàn và quote rồi mới lấy nến. Cặp đã delist không được chọn dù API vẫn còn trả nến lịch sử. Nếu nến cuối cũ quá hai chu kỳ, hệ thống loại kết quả thay vì phát tín hiệu từ dữ liệu chết. Trong chế độ tự chọn sàn (`AUTO`), lỗi catalog hoặc API nến của một sàn được ghi nhận và resolver tiếp tục thử sàn phía sau; kết quả cuối vẫn chỉ dùng đúng một sàn và hiển thị nguồn thực tế. Khi người dùng ghim sàn cụ thể trên chart hoặc danh sách theo dõi, API lỗi vẫn được báo trực tiếp và không tự đổi nguồn. Có thể đổi thứ tự trong `exchangePriority` của `config.json`.
 
 Tiền tố sàn trong file TradingView được bỏ khi nạp để hệ thống luôn áp dụng `exchangePriority`. Danh sách theo dõi 7 ngày vẫn giữ đúng sàn và cặp đã được chọn tại thời điểm bạn thêm thủ công.
 
@@ -87,7 +89,7 @@ Scanner D1 chỉ phát hiện và hiển thị tín hiệu; không tự đưa m�
 
 - D1 BUY chỉ tìm tín hiệu BUY trên khung nhỏ.
 - D1 SELL chỉ tìm tín hiệu SELL trên khung nhỏ.
-- Luôn dùng đúng sàn đã được chọn ở D1.
+- Ưu tiên đúng sàn đã được chọn ở D1; nếu timeout, `429`, `5xx` hoặc lỗi mạng thì thử lại hai lần trước khi chuyển sang sàn dự phòng.
 - Mỗi coin chỉ có một mục theo dõi; thêm lại sẽ cập nhật chiều, khung và bắt đầu lại 7 ngày.
 - Hết 7 ngày mục tự ngừng quét; có thể gia hạn hoặc xóa thủ công.
 - Scheduler quét vào phút thứ 5 mỗi giờ theo mặc định và chỉ gửi khi nến đã đóng có tín hiệu đúng chiều.
@@ -130,6 +132,8 @@ Tab giao diện đã được chuẩn bị. Dữ liệu dự kiến dùng SSI Fa
 Tool không tự động điều khiển TradingView. Công thức Pine đã được chuyển sang JavaScript và chạy trên dữ liệu nến lấy trực tiếp từ API của bảy sàn CEX hoặc GeckoTerminal. TradingView chỉ dùng để đối chiếu một số tín hiệu đầu tiên nhằm xác nhận hai cách tính cho kết quả giống nhau.
 
 Khi có PineScript mới, phần chuyển đổi tín hiệu sẽ được cập nhật riêng trong `lib/indicator.js`; cấu hình API và watchlist không cần thay đổi.
+
+Engine SMC nằm riêng tại `public/smc.js` và chỉ nhận mảng OHLC chuẩn hóa, không phụ thuộc API sàn. Swing dùng pivot đối xứng 5 nến mỗi phía; Internal dùng 2 nến mỗi phía. Pivot chỉ được xác nhận sau khi đủ nến bên phải nhưng không vẽ ký tự H/L lên chart. BOS/CHoCH chỉ dùng giá đóng cửa của nến đã đóng. Order Block, FVG, EQH/EQL và Premium/Discount/Equilibrium cũng chỉ dùng dữ liệu đã đóng. Dealing range lấy cặp swing đã xác nhận gần nhất theo hướng cấu trúc và dùng mức 50% làm Equilibrium. Mỗi lớp có công tắc riêng; mặc định chỉ bật Swing Structure và tùy chọn được lưu trong trình duyệt.
 
 ## Chạy tự động và Telegram
 

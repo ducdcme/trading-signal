@@ -6,6 +6,40 @@ const date = timestamp => new Intl.DateTimeFormat("vi-VN", { timeZone: "UTC", ye
 const price = value => Number.isFinite(value) ? value.toLocaleString("en-US", { maximumSignificantDigits: 10 }) : "—";
 const shortAddress = value => value?.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 const signalTypes = row => [...(row.buyTypes ?? []), ...(row.sellTypes ?? []), ...(row.warnings ?? []), ...(row.exitTypes ?? []), ...(row.trendTypes ?? [])];
+const chartUrl = (exchange, symbol, timeframe = "1D") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe })}`;
+const scanCacheKeys = { cex: "trading-signal:cex-scan:v1", dex: "trading-signal:dex-scan:v1" };
+const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
+
+function saveChartWorkspace(link) {
+  const container = link.closest("tbody") || document;
+  const items = [...container.querySelectorAll("[data-chart-symbol]")].map(item => ({
+    exchange: item.dataset.chartExchange,
+    symbol: item.dataset.chartSymbol
+  })).filter((item, index, all) => all.findIndex(other => `${other.exchange}:${other.symbol}` === `${item.exchange}:${item.symbol}`) === index);
+  if (!items.length) return;
+  try {
+    localStorage.setItem(chartWorkspaceKey, JSON.stringify({
+      selected: `${link.dataset.chartExchange}:${link.dataset.chartSymbol}`,
+      timeframe: link.dataset.chartTimeframe || "1D",
+      items
+    }));
+  } catch { /* URL vẫn mở được nếu trình duyệt không cho lưu localStorage. */ }
+}
+
+document.addEventListener("click", event => {
+  const link = event.target.closest("a[data-chart-symbol]");
+  if (link) saveChartWorkspace(link);
+});
+
+function saveScanCache(type, value) {
+  try { sessionStorage.setItem(scanCacheKeys[type], JSON.stringify(value)); }
+  catch { /* A large scan result must not prevent the table from rendering. */ }
+}
+
+function readScanCache(type) {
+  try { return JSON.parse(sessionStorage.getItem(scanCacheKeys[type]) || "null"); }
+  catch { return null; }
+}
 
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
@@ -75,6 +109,18 @@ function renderSummary(target, rows) {
 const order = { BOTH: 0, BUY: 1, SELL: 2, NONE: 3, SKIPPED: 4, ERROR: 5 };
 let lastCexResults = [];
 
+function renderCexResults(data, restored = false) {
+  renderSummary($("#summary"), data.results);
+  lastCexResults = [...data.results].sort((a, b) => order[a.status] - order[b.status]);
+  $("#results").innerHTML = lastCexResults.map((row, index) => {
+    const focusButtons = data.timeframe === "1D" && ["BUY", "SELL", "BOTH"].includes(row.status) ? `${row.buySignalTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellSignalTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
+    const symbol = row.instrumentId || row.requestedSymbol;
+    const chart = row.status !== "ERROR" && row.status !== "SKIPPED" ? `<a class="chart-link" data-chart-exchange="${h(row.exchange)}" data-chart-symbol="${h(symbol)}" data-chart-timeframe="${h(data.timeframe)}" href="${h(chartUrl(row.exchange, symbol, data.timeframe))}">${h(symbol)}</a>` : `<strong>${h(symbol)}</strong>`;
+    return `<tr><td>${chart}</td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td><td class="row-actions">${focusButtons}</td></tr>`;
+  }).join("");
+  $("#state").textContent = `${restored ? "Kết quả gần nhất" : "Đã quét"} ${data.results.length} cặp · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
+}
+
 $("#scan").addEventListener("click", async () => {
   const button = $("#scan");
   button.disabled = true; $("#state").textContent = "Đang lấy dữ liệu và tính tín hiệu…"; $("#results").innerHTML = ""; $("#summary").innerHTML = "";
@@ -82,13 +128,8 @@ $("#scan").addEventListener("click", async () => {
     const response = await fetch("/api/scan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbols: parseSymbols($("#symbols").value), timeframe: $("#cexTimeframe").value }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
-    renderSummary($("#summary"), data.results);
-    lastCexResults = data.results.sort((a, b) => order[a.status] - order[b.status]);
-    $("#results").innerHTML = lastCexResults.map((row, index) => {
-      const focusButtons = data.timeframe === "1D" && ["BUY", "SELL", "BOTH"].includes(row.status) ? `${row.buyTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
-      return `<tr><td><strong>${h(row.instrumentId || row.requestedSymbol)}</strong></td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td><td class="row-actions">${focusButtons}</td></tr>`;
-    }).join("");
-    $("#state").textContent = `Đã quét ${data.results.length} cặp · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
+    renderCexResults(data);
+    saveScanCache("cex", { data, symbols: $("#symbols").value, timeframe: $("#cexTimeframe").value });
   } catch (error) { $("#state").textContent = `Lỗi: ${error.message}`; }
   finally { button.disabled = false; }
 });
@@ -105,6 +146,16 @@ $("#results").addEventListener("click", async event => {
   } catch (error) { button.textContent = `Lỗi: ${error.message}`; button.disabled = false; }
 });
 
+function renderDexResults(data, restored = false) {
+  renderSummary($("#dexSummary"), data.results);
+  $("#dexResults").innerHTML = [...data.results].sort((a, b) => order[a.status] - order[b.status]).map(row => {
+    const types = row.error || signalTypes(row).join(", ") || "—";
+    const pool = row.poolName ? `${row.poolName} · ${row.quoteSymbol} · $${Number(row.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : row.error;
+    return `<tr title="${h(row.tokenAddress)}"><td><strong>${h(row.instrumentId)}</strong><small class="address">${h(shortAddress(row.tokenAddress))}</small></td><td>${h(row.network)}<small>${h(row.dex || "—")}</small></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(types)}</td><td>${h(pool || "—")}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td></tr>`;
+  }).join("");
+  $("#dexState").textContent = `${restored ? "Kết quả gần nhất" : "Đã quét"} ${data.results.length} token · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
+}
+
 $("#scanDex").addEventListener("click", async () => {
   const button = $("#scanDex");
   button.disabled = true; $("#dexState").textContent = "Đang tìm pool và lấy nến; vui lòng chờ…"; $("#dexResults").innerHTML = ""; $("#dexSummary").innerHTML = "";
@@ -113,16 +164,24 @@ $("#scanDex").addEventListener("click", async () => {
     const response = await fetch("/api/scan/dex", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tokens, timeframe: $("#dexTimeframe").value }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
-    renderSummary($("#dexSummary"), data.results);
-    $("#dexResults").innerHTML = data.results.sort((a, b) => order[a.status] - order[b.status]).map(row => {
-      const types = row.error || signalTypes(row).join(", ") || "—";
-      const pool = row.poolName ? `${row.poolName} · ${row.quoteSymbol} · $${Number(row.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : row.error;
-      return `<tr title="${h(row.tokenAddress)}"><td><strong>${h(row.instrumentId)}</strong><small class="address">${h(shortAddress(row.tokenAddress))}</small></td><td>${h(row.network)}<small>${h(row.dex || "—")}</small></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(types)}</td><td>${h(pool || "—")}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td></tr>`;
-    }).join("");
-    $("#dexState").textContent = `Đã quét ${data.results.length} token · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
+    renderDexResults(data);
+    saveScanCache("dex", { data, tokens: $("#dexTokens").value, timeframe: $("#dexTimeframe").value });
   } catch (error) { $("#dexState").textContent = `Lỗi: ${error.message}`; }
   finally { button.disabled = false; }
 });
+
+const cachedCex = readScanCache("cex");
+if (cachedCex?.data?.results?.length) {
+  $("#symbols").value = cachedCex.symbols || $("#symbols").value;
+  $("#cexTimeframe").value = cachedCex.timeframe || cachedCex.data.timeframe || "1D";
+  renderCexResults(cachedCex.data, true);
+}
+const cachedDex = readScanCache("dex");
+if (cachedDex?.data?.results?.length) {
+  $("#dexTokens").value = cachedDex.tokens || "";
+  $("#dexTimeframe").value = cachedDex.timeframe || cachedDex.data.timeframe || "1D";
+  renderDexResults(cachedDex.data, true);
+}
 
 function renderLastRuns(lastRuns = {}) {
   const rows = ["crypto:1D", "crypto:1W", "focus"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
@@ -145,7 +204,6 @@ function fillAutomation(data) {
   $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
   $("#focusMinute").value = String(settings.schedules.focusScan.minute);
   $("#sendNoSignalSummary").checked = settings.telegram.sendNoSignalSummary;
-  $("#sendErrors").checked = settings.telegram.sendErrors;
   $("#autoCexEnabled").checked = settings.assets.cex.enabled;
   $("#autoDexEnabled").checked = settings.assets.dex.enabled;
   $("#autoCexSymbols").value = (settings.assets.cex.watchlist.length ? settings.assets.cex.watchlist : config.symbols).join(", ");
@@ -163,7 +221,7 @@ function collectAutomation() {
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
       sendNoSignalSummary: $("#sendNoSignalSummary").checked,
-      sendErrors: $("#sendErrors").checked
+      sendErrors: false
     },
     assets: {
       cex: { enabled: $("#autoCexEnabled").checked, watchlist: parseSymbols($("#autoCexSymbols").value) },
@@ -209,7 +267,7 @@ async function loadFocusList() {
   $("#focusCount").textContent = `${data.items.filter(item => item.expiresAt > data.now).length} coin đang chạy`;
   $("#focusResults").innerHTML = data.items.length ? data.items.sort((a, b) => a.expiresAt - b.expiresAt).map(item => {
     const active = item.expiresAt > data.now;
-    return `<tr><td><strong>${h(item.asset)}</strong></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${h(item.direction.toLowerCase())}">${h(item.direction)}</span></td><td>${h(item.timeframe)}</td><td class="${active ? "active-time" : "expired"}">${h(remainingText(item.expiresAt, data.now))}</td><td class="row-actions"><button class="secondary focus-action" data-extend="${h(item.asset)}">+7 ngày</button><button class="focus-action sell-action" data-delete="${h(item.asset)}">Xóa</button></td></tr>`;
+    return `<tr><td><a class="chart-link" data-chart-exchange="${h(item.exchange)}" data-chart-symbol="${h(item.instrumentId)}" data-chart-timeframe="${h(item.timeframe)}" href="${h(chartUrl(item.exchange, item.instrumentId, item.timeframe))}">${h(item.asset)}</a></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${h(item.direction.toLowerCase())}">${h(item.direction)}</span></td><td>${h(item.timeframe)}</td><td class="${active ? "active-time" : "expired"}">${h(remainingText(item.expiresAt, data.now))}</td><td class="row-actions"><button class="secondary focus-action" data-extend="${h(item.asset)}">+7 ngày</button><button class="focus-action sell-action" data-delete="${h(item.asset)}">Xóa</button></td></tr>`;
   }).join("") : `<tr><td colspan="6">Chưa có coin nào. Sau khi quét D1, bấm “+ BUY” hoặc “+ SELL” ở tín hiệu bạn muốn theo dõi.</td></tr>`;
 }
 

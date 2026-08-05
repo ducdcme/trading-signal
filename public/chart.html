@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Biểu đồ · Trading Signal</title><link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main class="chart-page">
+    <header class="chart-header">
+      <div><a id="backToList" class="back-link" href="/">← Quay lại danh sách</a><div class="chart-title-row"><div><p class="eyebrow">CHART & MARKET DETAIL</p><h1 id="chartTitle">Đang tải biểu đồ…</h1></div><span id="chartMeta" class="chart-meta"></span></div></div>
+    </header>
+    <section class="chart-toolbar" aria-label="Tùy chọn biểu đồ">
+      <div id="timeframes" class="timeframe-buttons">
+        <button class="timeframe-button" data-timeframe="1H">1H</button><button class="timeframe-button" data-timeframe="4H">4H</button><button class="timeframe-button" data-timeframe="1D">D1</button><button class="timeframe-button" data-timeframe="1W">W1</button>
+      </div>
+      <label><input id="showTrendEma" type="checkbox" checked> EMA xu hướng</label>
+      <label><input id="showSignals" type="checkbox" checked> Tín hiệu</label>
+      <details class="smc-settings">
+        <summary>SMC</summary>
+        <div class="smc-settings-panel">
+          <label><input id="showSwingStructure" type="checkbox" checked> Swing Structure</label>
+          <label><input id="showInternalStructure" type="checkbox"> Internal Structure</label>
+          <label><input id="showOrderBlocks" type="checkbox"> Order Block</label>
+          <label><input id="showFairValueGaps" type="checkbox"> FVG</label>
+          <label><input id="showEqualLevels" type="checkbox" checked> EQH/EQL</label>
+          <label><input id="showPremiumZone" type="checkbox"> Premium</label>
+          <label><input id="showDiscountZone" type="checkbox"> Discount</label>
+          <label><input id="showEquilibrium" type="checkbox"> Equilibrium 50%</label>
+        </div>
+      </details>
+      <span id="smcTrend" class="smc-trend neutral">SMC: Chưa xác định</span>
+      <label>Số nến <select id="visibleBars"><option value="100">100</option><option value="160" selected>160</option><option value="250">250</option><option value="500">500</option><option id="customVisibleBars" value="160" hidden>160</option></select></label>
+      <button id="autoScale" class="chart-tool-button" type="button" title="Khôi phục trục giá tự động">Trục Y: Tự động</button>
+      <button id="resetView" class="chart-tool-button" type="button" title="Trở về các nến mới nhất">Về hiện tại</button>
+    </section>
+    <div class="chart-workspace">
+      <section class="chart-shell">
+        <canvas id="chart" class="chart-canvas" aria-label="Biểu đồ nến Nhật với EMA và tín hiệu"></canvas>
+        <div id="chartState" class="chart-state">Đang lấy dữ liệu biểu đồ…</div>
+      </section>
+      <aside class="chart-watchlist" aria-label="Danh sách coin trên biểu đồ">
+        <div class="chart-watchlist-heading"><div><p class="eyebrow">CHART LIST</p><h2>Danh sách coin</h2></div><span id="chartListCount">0</span></div>
+        <form id="addChartCoin" class="chart-add-form">
+          <input id="chartCoinInput" type="text" maxlength="40" autocomplete="off" placeholder="ARB hoặc BINANCE:ARBUSDT" aria-label="Mã coin cần thêm">
+          <button type="submit" title="Thêm coin vào danh sách chart">+ Thêm</button>
+        </form>
+        <p id="chartListState" class="chart-list-state">Giá so với đóng cửa D1 trước.</p>
+        <div class="chart-list-columns"><span>Cặp</span><span>Giá</span><span>Thay đổi</span></div>
+        <div id="chartCoinList" class="chart-coin-list"></div>
+      </aside>
+    </div>
+    <div class="chart-legend">
+      <span><i class="legend-swatch legend-trend-up"></i> Uptrend: EMA21 trên EMA55</span><span><i class="legend-swatch legend-trend-down"></i> Downtrend: EMA55 trên EMA21</span><span class="legend-buy">▲ Mua / extS</span><span class="legend-sell">▼ Bán / extL</span><span class="legend-exit">Màu nhạt = tín hiệu chuẩn bị</span>
+      <span class="legend-smc-up">BOS/CHoCH tăng</span><span class="legend-smc-down">BOS/CHoCH giảm</span><span class="legend-exit">Premium/Discount/EQ là bối cảnh, không phải tín hiệu độc lập</span>
+    </div>
+    <p class="note">Thời gian hiển thị theo GMT+7 (Việt Nam). SMC chỉ dùng nến đã đóng; BOS/CHoCH được xác nhận bằng giá đóng cửa. Di chuyển chuột để xem đường gióng thời gian và giá. Lăn lên để giãn trục X, lăn xuống để co trục X. Giữ chuột trái trong biểu đồ để kéo ngang/dọc; giữ Shift và kéo để đo biến động. Giữ và kéo trực tiếp trên trục giá bên phải để co giãn Y; nhấp đúp để autoscale.</p>
+  </main>
+  <script type="module" src="chart.js"></script>
+</body>
+</html>
