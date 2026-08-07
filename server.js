@@ -19,10 +19,19 @@ import { groupDirectionalSignals, signalDisplayName } from "./lib/signal-groups.
 import { ema } from "./lib/ta.js";
 import { fetchMarketQuote } from "./lib/quotes.js";
 import { formatScanErrorSummary } from "./lib/scan-errors.js";
+import { addNewCoinEntry, deleteNewCoinEntry, loadNewCoinList, setNewCoinPaused } from "./lib/new-coin-store.js";
+import { resolveActiveSpotMarket } from "./lib/market-catalog.js";
+import { normalizeFocusConfig } from "./lib/focus-config.js";
+import { normalizeNewCoinConfig } from "./lib/new-coin-config.js";
+import { activeNewCoinItems, formatNewCoinReport } from "./lib/new-coin-automation.js";
+import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "./lib/automation-schedule.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
 const config = JSON.parse(await readFile(join(root, "config.json"), "utf8"));
+config.focus = normalizeFocusConfig(config.focus);
+config.newCoins = normalizeNewCoinConfig(config.newCoins);
+config.automation = normalizeAutomationRuntimeConfig(config.automation);
 const packageInfo = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const port = Number(process.env.PORT || 3210);
 const host = process.env.HOST || "127.0.0.1";
@@ -30,6 +39,7 @@ const dataDir = resolve(root, process.env.DATA_DIR || "data");
 const automationPath = join(dataDir, "automation.json");
 const automationStatePath = join(dataDir, "automation-state.json");
 const focusPath = join(dataDir, "focus-watchlist.json");
+const newCoinPath = join(dataDir, "new-coin-watchlist.json");
 const startedAt = Date.now();
 const production = process.env.NODE_ENV === "production";
 const auth = loadAuthConfig();
@@ -95,18 +105,24 @@ function normalizeInstruments(input) {
   return parseInstruments(base).map(item => parseInstrument(item.asset));
 }
 
-function analyzeCandles(dailyCandles, timeframe) {
+function analyzeCandles(dailyCandles, timeframe, minimumCandles = 100) {
   const candles = candlesForTimeframe(dailyCandles, timeframe);
-  if (candles.length < 100) throw new Error(`Không đủ dữ liệu: chỉ có ${candles.length} nến ${timeframe}`);
+  if (candles.length < minimumCandles) throw new Error(`Không đủ dữ liệu: chỉ có ${candles.length} nến ${timeframe}`);
   const signals = calculateSignals(candles);
   const candle = candles.at(-1);
   const found = groupDirectionalSignals(signals.at(-1));
   return { ...found, close: candle.close, candleOpenTime: candle.openTime, candleCloseTime: candle.closeTime, candleCount: candles.length };
 }
 
+function sourceTimeframeFor(timeframe) {
+  if (timeframe === "8H") return "4H";
+  if (timeframe === "1W") return "1D";
+  return timeframe;
+}
+
 function chartPayload(candles, instrument, timeframe) {
-  const selected = candlesForTimeframe(candles, timeframe);
   const generatedAt = Date.now();
+  const selected = candlesForTimeframe(candles, timeframe, { includeOpen: true, now: generatedAt });
   const closedCount = selected.filter(candle => candle.closeTime < generatedAt).length;
   const signals = calculateSignals(selected.slice(0, closedCount)).map(groupDirectionalSignals);
   const closes = selected.map(candle => candle.close);
@@ -142,7 +158,7 @@ function logScanErrors(job, rows) {
 async function scan(instruments, timeframe) {
   return mapLimited(instruments, config.requestConcurrency, async instrument => {
     try {
-      const sourceTimeframe = timeframe === "1W" ? "1D" : timeframe;
+      const sourceTimeframe = sourceTimeframeFor(timeframe);
       const resolved = await resolveAndFetchClosedCandles(instrument, sourceTimeframe, config.candleLimit, config.exchangePriority, config.quotePriority);
       const selected = resolved.instrument;
       return { assetType: "CEX", asset: selected.asset, symbol: selected.key, requestedSymbol: instrument.key, exchange: selected.exchange, instrumentId: selected.instrumentId, timeframe, ...analyzeCandles(resolved.candles, timeframe) };
@@ -156,7 +172,7 @@ async function scan(instruments, timeframe) {
 async function scanFocusItems(items) {
   return mapLimited(items, config.requestConcurrency, async item => {
     try {
-      const resolved = await resolveFocusCandles(item, item.timeframe, Math.min(config.candleLimit, 1000), config.exchangePriority, config.quotePriority);
+      const resolved = await resolveFocusCandles(item, sourceTimeframeFor(item.timeframe), Math.min(config.candleLimit, 1000), config.exchangePriority, config.quotePriority);
       const selected = resolved.instrument;
       return {
         assetType: "FOCUS", symbol: item.asset, asset: item.asset,
@@ -168,6 +184,41 @@ async function scanFocusItems(items) {
       };
     } catch (error) {
       return { assetType: "FOCUS", symbol: item.asset, exchange: item.exchange, instrumentId: item.instrumentId, timeframe: item.timeframe, expectedDirection: item.direction, expiresAt: item.expiresAt, status: "ERROR", error: error.message };
+    }
+  });
+}
+
+async function scanNewCoinItems(items) {
+  return mapLimited(items, config.requestConcurrency, async item => {
+    try {
+      const instrument = parseInstrument(`${item.exchange}:${item.instrumentId}`);
+      const resolved = await resolveAndFetchClosedCandles(
+        instrument,
+        sourceTimeframeFor(config.newCoins.timeframe),
+        config.candleLimit,
+        config.exchangePriority,
+        config.quotePriority
+      );
+      return {
+        assetType: "NEW_COIN",
+        symbol: item.asset,
+        asset: item.asset,
+        exchange: item.exchange,
+        instrumentId: item.instrumentId,
+        timeframe: config.newCoins.timeframe,
+        ...analyzeCandles(resolved.candles, config.newCoins.timeframe, config.newCoins.minimumCandles)
+      };
+    } catch (error) {
+      return {
+        assetType: "NEW_COIN",
+        symbol: item.asset,
+        asset: item.asset,
+        exchange: item.exchange,
+        instrumentId: item.instrumentId,
+        timeframe: config.newCoins.timeframe,
+        status: "ERROR",
+        error: error.message
+      };
     }
   });
 }
@@ -205,7 +256,11 @@ async function scanDex(tokens, timeframe) {
 }
 
 function effectiveAutomation(settings) {
-  return { ...settings, telegram: { ...settings.telegram, chatId: settings.telegram.chatId || String(process.env.TELEGRAM_CHAT_ID || "").trim() } };
+  return {
+    ...settings,
+    timezone: config.automation.timezone,
+    telegram: { ...settings.telegram, chatId: settings.telegram.chatId || String(process.env.TELEGRAM_CHAT_ID || "").trim() }
+  };
 }
 
 function formatAutomationReport(timeframe, rows, delivery, settings, trigger) {
@@ -261,7 +316,7 @@ function focusDirectionMatched(row) {
 async function runFocusAutomation(trigger = "manual") {
   const settings = effectiveAutomation(await loadAutomation(automationPath));
   const now = Date.now();
-  const focus = await loadFocusList(focusPath, now);
+  const focus = await loadFocusList(focusPath, now, config.focus);
   const active = focus.items.filter(item => item.expiresAt > now);
   if (!active.length) return { total: 0, matchedSignals: 0, sentSignals: 0, errors: 0, messageSent: false };
   const rows = await scanFocusItems(active);
@@ -287,30 +342,71 @@ async function runFocusAutomation(trigger = "manual") {
   return { total: rows.length, matchedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, messageSent: shouldSend, results: trigger === "manual" ? rows : undefined };
 }
 
+async function runNewCoinAutomation(trigger = "manual") {
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const list = await loadNewCoinList(newCoinPath);
+  const active = activeNewCoinItems(list.items);
+  const paused = list.items.length - active.length;
+  if (!active.length) return { timeframe: config.newCoins.timeframe, total: 0, paused, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, messageSent: false };
+
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+
+  const rows = await scanNewCoinItems(active);
+  const state = await loadAutomationState(automationStatePath);
+  const delivery = selectDeliverySignals(rows, state.sentKeys, `NEW_COIN:${config.newCoins.timeframe}`, trigger);
+  delivery.paused = paused;
+  const errors = rows.filter(row => row.status === "ERROR");
+  logScanErrors("new-coins:8H", rows);
+
+  const allFailed = rows.length > 0 && errors.length === rows.length;
+  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
+  if (shouldSend) await sendTelegramText(token, settings.telegram.chatId, formatNewCoinReport(rows, delivery, settings, trigger, config.newCoins.timeframe));
+
+  state.sentKeys = delivery.sentKeys;
+  state.lastRuns = {
+    ...(state.lastRuns || {}),
+    newCoins: {
+      at: Date.now(), assetGroup: "new-coins", timeframe: config.newCoins.timeframe, trigger,
+      total: rows.length, paused, detectedSignals: delivery.detected.length,
+      sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed,
+      errors: errors.length, status: "OK"
+    }
+  };
+  await saveAutomationState(automationStatePath, state);
+  return {
+    timeframe: config.newCoins.timeframe, total: rows.length, paused,
+    detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+    suppressedSignals: delivery.suppressed, errors: errors.length, messageSent: shouldSend,
+    results: trigger === "manual" ? rows : undefined
+  };
+}
+
 let schedulerBusy = false;
 async function schedulerTick() {
   if (schedulerBusy) return;
   schedulerBusy = true;
   try {
     const settings = effectiveAutomation(await loadAutomation(automationPath));
-    if (!settings.enabled) return;
     const clock = localClock(new Date(), settings.timezone);
-    const jobs = [
-      { key: "cryptoDaily", timeframe: "1D", due: settings.schedules.cryptoDaily.enabled && clock.time === settings.schedules.cryptoDaily.time },
-      { key: "cryptoWeekly", timeframe: "1W", due: settings.schedules.cryptoWeekly.enabled && clock.day === settings.schedules.cryptoWeekly.day && clock.time === settings.schedules.cryptoWeekly.time },
-      { key: "focusScan", timeframe: "FOCUS", due: settings.schedules.focusScan.enabled && Number(clock.time.slice(3)) === settings.schedules.focusScan.minute }
-    ];
-    for (const job of jobs.filter(item => item.due)) {
+    const jobs = dueAutomationJobs(clock, settings, config);
+    for (const job of jobs) {
       const slot = `${clock.date}|${clock.time}`;
       const state = await loadAutomationState(automationStatePath);
       if (state.lastSlots?.[job.key] === slot) continue;
       state.lastSlots = { ...(state.lastSlots || {}), [job.key]: slot };
       await saveAutomationState(automationStatePath, state);
-      try { job.timeframe === "FOCUS" ? await runFocusAutomation("schedule") : await runAutomation(job.timeframe, "schedule"); }
+      try {
+        if (job.timeframe === "FOCUS") await runFocusAutomation("schedule");
+        else if (job.timeframe === "NEW_COIN") await runNewCoinAutomation("schedule");
+        else await runAutomation(job.timeframe, "schedule");
+      }
       catch (error) {
         const latest = await loadAutomationState(automationStatePath);
-        const runKey = job.timeframe === "FOCUS" ? "focus" : `crypto:${job.timeframe}`;
-        latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup: job.timeframe === "FOCUS" ? "focus" : "crypto", timeframe: job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
+        const runKey = job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
+        const assetGroup = job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
+        latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup, timeframe: job.timeframe === "NEW_COIN" ? config.newCoins.timeframe : job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
         await saveAutomationState(automationStatePath, latest);
         console.error(`Automation ${job.timeframe}: ${error.message}`);
       }
@@ -379,7 +475,9 @@ const server = http.createServer(async (req, res) => {
       if (candidate.enabled && !candidate.telegram.chatId) return json(res, 400, { error: "Cần Telegram Chat ID trước khi bật tự động" });
       const hasCex = candidate.assets.cex.enabled && candidate.assets.cex.watchlist.length;
       const hasDex = candidate.assets.dex.enabled && candidate.assets.dex.watchlist.length;
-      if (candidate.enabled && !hasCex && !hasDex) return json(res, 400, { error: "Cần bật ít nhất một watchlist CEX hoặc DEX có dữ liệu" });
+      const newCoins = await loadNewCoinList(newCoinPath);
+      const hasNewCoins = candidate.schedules.newCoinScan.enabled && activeNewCoinItems(newCoins.items).length;
+      if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins) return json(res, 400, { error: "Cần bật ít nhất một watchlist CEX, DEX hoặc Coin mới có dữ liệu" });
       const settings = effectiveAutomation(await saveAutomation(automationPath, normalized));
       return json(res, 200, { settings, saved: true });
     }
@@ -398,24 +496,48 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await runAutomation(timeframe));
     }
     if (url.pathname === "/api/focus" && req.method === "GET") {
-      const data = await loadFocusList(focusPath);
+      const data = await loadFocusList(focusPath, Date.now(), config.focus);
       return json(res, 200, { items: data.items, now: Date.now() });
     }
     if (url.pathname === "/api/focus" && req.method === "POST") {
       const request = await readJsonBody(req);
-      const entry = await upsertFocusEntry(focusPath, request);
+      const entry = await upsertFocusEntry(focusPath, request, Date.now(), config.focus);
       return json(res, 200, { entry, saved: true });
     }
     if (url.pathname === "/api/focus/run" && req.method === "POST") return json(res, 200, await runFocusAutomation("manual"));
+    if (url.pathname === "/api/new-coins" && req.method === "GET") {
+      const data = await loadNewCoinList(newCoinPath);
+      return json(res, 200, { items: data.items, now: Date.now() });
+    }
+    if (url.pathname === "/api/new-coins/run" && req.method === "POST") return json(res, 200, await runNewCoinAutomation("manual"));
+    if (url.pathname === "/api/new-coins" && req.method === "POST") {
+      const request = await readJsonBody(req);
+      const instrumentId = String(request.instrumentId || request.symbol || "").trim().toUpperCase();
+      if (!instrumentId) return json(res, 400, { error: "Hãy nhập mã coin hoặc cặp Spot" });
+      let active;
+      try { active = await resolveActiveSpotMarket(instrumentId, config.newCoins.exchangePriority, config.quotePriority); }
+      catch (error) {
+        if (error instanceof MarketNotFoundError) return json(res, 400, { error: error.message });
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "new-coins:add", asset: instrumentId, error: error.message }));
+        return json(res, 503, { error: "Không thể kiểm tra sàn lúc này; chi tiết đã được ghi vào log" });
+      }
+      try {
+        const entry = await addNewCoinEntry(newCoinPath, active);
+        return json(res, 201, { entry, saved: true });
+      } catch (error) {
+        if (error.code === "NEW_COIN_EXISTS") return json(res, 409, { error: error.message });
+        throw error;
+      }
+    }
     if (url.pathname === "/api/chart/cex" && req.method === "GET") {
-      const timeframe = ["1H", "4H", "1D", "1W"].includes(url.searchParams.get("timeframe")) ? url.searchParams.get("timeframe") : "1D";
+      const timeframe = ["1H", "4H", "8H", "1D", "1W"].includes(url.searchParams.get("timeframe")) ? url.searchParams.get("timeframe") : "1D";
       const exchange = String(url.searchParams.get("exchange") || "AUTO").toUpperCase();
       const symbol = String(url.searchParams.get("symbol") || "").trim().toUpperCase();
       const requestedLimit = Number(url.searchParams.get("limit") || config.candleLimit);
       const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 100), 1000) : config.candleLimit;
       if (!symbol || !/^[A-Z0-9_-]{2,40}$/.test(symbol)) return json(res, 400, { error: "Mã coin không hợp lệ" });
       const instrument = parseInstrument(exchange === "AUTO" ? symbol : `${exchange}:${symbol}`);
-      const sourceTimeframe = timeframe === "1W" ? "1D" : timeframe;
+      const sourceTimeframe = sourceTimeframeFor(timeframe);
       const resolved = await resolveAndFetchClosedCandles(instrument, sourceTimeframe, limit, config.exchangePriority, config.quotePriority, true);
       return json(res, 200, chartPayload(resolved.candles, resolved.instrument, timeframe));
     }
@@ -439,8 +561,21 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { generatedAt: Date.now(), quotes });
     }
     const focusMatch = url.pathname.match(/^\/api\/focus\/([A-Z0-9]+)(?:\/(extend))?$/i);
-    if (focusMatch && req.method === "POST" && focusMatch[2] === "extend") return json(res, 200, { entry: await extendFocusEntry(focusPath, focusMatch[1]) });
-    if (focusMatch && req.method === "DELETE" && !focusMatch[2]) return json(res, (await deleteFocusEntry(focusPath, focusMatch[1])) ? 200 : 404, { deleted: true });
+    if (focusMatch && req.method === "POST" && focusMatch[2] === "extend") return json(res, 200, { entry: await extendFocusEntry(focusPath, focusMatch[1], Date.now(), config.focus) });
+    if (focusMatch && req.method === "DELETE" && !focusMatch[2]) return json(res, (await deleteFocusEntry(focusPath, focusMatch[1], config.focus)) ? 200 : 404, { deleted: true });
+    const newCoinMatch = url.pathname.match(/^\/api\/new-coins\/([^/]+)(?:\/(pause))?$/);
+    if (newCoinMatch) {
+      const id = decodeURIComponent(newCoinMatch[1]);
+      if (req.method === "PATCH" && newCoinMatch[2] === "pause") {
+        const request = await readJsonBody(req);
+        const entry = await setNewCoinPaused(newCoinPath, id, request.paused === true);
+        return entry ? json(res, 200, { entry, saved: true }) : json(res, 404, { error: "Coin không còn trong danh sách" });
+      }
+      if (req.method === "DELETE" && !newCoinMatch[2]) {
+        const deleted = await deleteNewCoinEntry(newCoinPath, id);
+        return deleted ? json(res, 200, { deleted: true }) : json(res, 404, { error: "Coin không còn trong danh sách" });
+      }
+    }
     if (url.pathname === "/api/scan" && req.method === "POST") {
       const request = await readJsonBody(req);
       const timeframe = request.timeframe === "1W" ? "1W" : "1D";
@@ -469,7 +604,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`Trading Signal ${packageInfo.version}: http://${host}:${port}`);
   schedulerTick();
-  setInterval(schedulerTick, 30_000).unref();
+  setInterval(schedulerTick, config.automation.schedulerPollSeconds * 1000).unref();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

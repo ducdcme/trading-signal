@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureFreshCandles, resolveAndFetchClosedDailyCandles, resolveFocusCandles } from "../lib/market.js";
 import { parseInstrument } from "../lib/instruments.js";
-import { clearMarketCatalogCache } from "../lib/market-catalog.js";
+import { clearMarketCatalogCache, resolveActiveSpotMarket } from "../lib/market-catalog.js";
 
 const realFetch = globalThis.fetch;
 const response = payload => ({ ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) });
@@ -32,6 +32,39 @@ test("selects the first exchange with an active Spot market", async () => {
   assert.equal(resolved.instrument.exchange, "BYBIT");
   assert.equal(resolved.instrument.instrumentId, "MNTUSDT");
   assert.equal(calls.length, 3);
+});
+
+test("new coin discovery pins the first active market in Binance, OKX, Bybit order", async () => {
+  const calls = [];
+  globalThis.fetch = async url => {
+    const value = String(url);
+    calls.push(value);
+    if (value.includes("binance") && value.includes("exchangeInfo")) return response({ symbols: [] });
+    if (value.includes("okx.com") && value.includes("instruments")) return response({ code: "0", data: [{ state: "live", instId: "HYPE-USDT", baseCcy: "HYPE", quoteCcy: "USDT" }] });
+    throw new Error(`Unexpected URL: ${value}`);
+  };
+
+  const market = await resolveActiveSpotMarket("HYPE", ["BINANCE", "OKX", "BYBIT"], ["USDT", "USDC", "FDUSD"]);
+  assert.equal(market.exchange, "OKX");
+  assert.equal(market.instrumentId, "HYPE-USDT");
+  assert.ok(calls[0].includes("binance"));
+  assert.ok(calls[1].includes("okx.com"));
+  assert.equal(calls.some(value => value.includes("bybit")), false);
+});
+
+test("new coin discovery respects an explicitly entered quote", async () => {
+  globalThis.fetch = async url => {
+    const value = String(url);
+    if (value.includes("binance") && value.includes("exchangeInfo")) return response({ symbols: [
+      { status: "TRADING", isSpotTradingAllowed: true, symbol: "HYPEUSDT", baseAsset: "HYPE", quoteAsset: "USDT" },
+      { status: "TRADING", isSpotTradingAllowed: true, symbol: "HYPEUSDC", baseAsset: "HYPE", quoteAsset: "USDC" }
+    ] });
+    throw new Error(`Unexpected URL: ${value}`);
+  };
+
+  const market = await resolveActiveSpotMarket("HYPEUSDC", ["BINANCE", "OKX", "BYBIT"], ["USDT", "USDC", "FDUSD"]);
+  assert.equal(market.exchange, "BINANCE");
+  assert.equal(market.instrumentId, "HYPEUSDC");
 });
 
 test("continues to later exchanges when OKX catalog API fails", async () => {

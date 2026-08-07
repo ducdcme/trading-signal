@@ -9,6 +9,7 @@
     <header><div><p class="eyebrow">MULTI-ASSET SIGNAL SCANNER</p><h1>Trading Signal</h1><p>CEX, DEX và chứng khoán Việt Nam trên cùng một công cụ.</p></div><div class="header-actions"><span class="live">Closed candles only</span><button id="logout" class="secondary" type="button">Đăng xuất</button></div></header>
     <nav class="tabs" aria-label="Loại tài sản">
       <button class="tab active" data-tab="cex">CEX Crypto</button>
+      <button class="tab" data-tab="new-coins">Coin mới</button>
       <button class="tab" data-tab="focus">Theo dõi 7 ngày</button>
       <button class="tab" data-tab="dex">DEX Crypto</button>
       <button class="tab" data-tab="stocks">VN Stocks</button>
@@ -27,10 +28,23 @@
       <section class="table-wrap"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Giá đóng</th><th>Nến</th><th>Theo dõi</th></tr></thead><tbody id="results"></tbody></table></section>
     </section>
 
+    <section class="tab-panel" id="panel-new-coins">
+      <section class="controls">
+        <div class="section-heading"><div><p class="eyebrow">NEW COIN · 8H WATCHLIST</p><h2>Coin mới</h2><p>Nhập mã coin hoặc cặp Spot; hệ thống tự dò Binance → OKX → Bybit rồi ghim thị trường tìm thấy. Coin được giữ cho đến khi bạn chủ động xóa.</p></div><span id="newCoinCount" class="status-pill">0 coin</span></div>
+        <form id="newCoinForm" class="new-coin-form">
+          <label>Mã coin / Cặp Spot <input id="newCoinSymbol" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Ví dụ: HYPE hoặc HYPEUSDT" required></label>
+          <button id="addNewCoin" type="submit">+ Thêm coin</button>
+        </form>
+        <div class="focus-toolbar"><button id="runNewCoinsNow" type="button" class="secondary">Quét 8H & gửi Telegram</button><span id="newCoinState">Sẵn sàng. Hệ thống sẽ tự tìm cặp Spot theo thứ tự ưu tiên trước khi lưu.</span></div>
+      </section>
+      <section class="table-wrap new-coin-table"><table><thead><tr><th>Coin</th><th>Sàn / Cặp ghim</th><th>Trạng thái</th><th>Ngày thêm</th><th>Biểu đồ</th><th>Thao tác</th></tr></thead><tbody id="newCoinResults"></tbody></table></section>
+      <p class="note">Coin đang hoạt động được quét sau khi nến 8H đóng; coin tạm dừng được giữ lại nhưng không gọi API sàn và không gửi Telegram.</p>
+    </section>
+
     <section class="tab-panel" id="panel-focus">
       <section class="controls">
         <div class="section-heading"><div><p class="eyebrow">ENTRY FOCUS WATCHLIST</p><h2>Theo dõi điểm vào trong 7 ngày</h2><p>Chỉ các tín hiệu D1 bạn tự chọn mới được đưa vào đây. Hệ thống giữ nguyên sàn đã phát tín hiệu D1.</p></div><span id="focusCount" class="status-pill">0 coin</span></div>
-        <div class="focus-toolbar"><label>Khung mặc định khi thêm <select id="focusDefaultTimeframe"><option value="1H">1H</option><option value="4H">4H</option></select></label><button id="runFocusNow" class="secondary">Quét điểm vào ngay</button><span id="focusState">Sẵn sàng</span></div>
+        <div class="focus-toolbar"><label>Khung mặc định khi thêm <select id="focusDefaultTimeframe"></select></label><button id="runFocusNow" class="secondary">Quét điểm vào ngay</button><span id="focusState">Sẵn sàng</span></div>
       </section>
       <section class="table-wrap focus-table"><table><thead><tr><th>Coin</th><th>Sàn</th><th>Chiều D1</th><th>Khung tìm điểm vào</th><th>Còn lại</th><th>Thao tác</th></tr></thead><tbody id="focusResults"></tbody></table></section>
       <p class="note">Hết 7 ngày, coin tự ngừng quét. Bạn có thể gia hạn thêm 7 ngày hoặc xóa thủ công.</p>
@@ -76,10 +90,11 @@
           <fieldset>
             <legend>2. Lịch chạy</legend>
             <label class="check-row"><input id="automationEnabled" type="checkbox"> Bật chạy tự động</label>
-            <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><input id="dailyTime" type="time"><span>mỗi ngày</span></div>
-            <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div>
-            <div class="schedule-row"><label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> 1H/4H</label><input id="focusMinute" type="number" min="0" max="59"><span>phút thứ … mỗi giờ</span></div>
-            <small>Múi giờ cố định: Asia/Ho_Chi_Minh. Mặc định 07:10, sau lúc nến UTC đóng.</small>
+            <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><div class="schedule-fields"><input id="dailyTime" type="time"></div><span class="schedule-note">mỗi ngày</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><div class="schedule-fields weekly-fields"><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div><span class="schedule-note">mỗi tuần</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> <span class="focus-timeframes-label">4H/8H</span></label><div class="schedule-fields minute-fields"><input id="focusMinute" type="number" min="0" max="59"><span>phút</span></div><span class="schedule-note">sau giờ đóng nến</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="newCoinScheduleEnabled" type="checkbox"> Coin mới 8H</label><div class="schedule-fields"><strong id="newCoinScheduleTimes">07:05 · 15:05 · 23:05</strong></div><span class="schedule-note">giờ Việt Nam</span></div>
+            <small>Múi giờ từ config: <span id="automationTimezone">Asia/Ho_Chi_Minh</span>. Mặc định 07:10, sau lúc nến UTC đóng.</small>
           </fieldset>
         </div>
 
@@ -100,7 +115,7 @@
         </fieldset>
 
         <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi tóm tắt khi không có tín hiệu mới</label><small>Chi tiết lỗi chỉ ghi log; Telegram chỉ hiển thị tổng số lỗi.</small></div>
-        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><span id="automationState">Chưa lưu thay đổi</span></div>
+        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
         <div id="lastRuns" class="last-runs"></div>
       </section>
     </section>

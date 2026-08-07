@@ -7,11 +7,11 @@
 <body>
   <main class="chart-page">
     <header class="chart-header">
-      <div><a id="backToList" class="back-link" href="/">← Quay lại danh sách</a><div class="chart-title-row"><div><p class="eyebrow">CHART & MARKET DETAIL</p><h1 id="chartTitle">Đang tải biểu đồ…</h1></div><span id="chartMeta" class="chart-meta"></span></div></div>
+      <div><a id="backToList" class="back-link" href="/#cex">← Quay lại danh sách</a><div class="chart-title-row"><div><p class="eyebrow">CHART & MARKET DETAIL</p><h1 id="chartTitle">Đang tải biểu đồ…</h1></div><span id="chartMeta" class="chart-meta"></span></div></div>
     </header>
     <section class="chart-toolbar" aria-label="Tùy chọn biểu đồ">
       <div id="timeframes" class="timeframe-buttons">
-        <button class="timeframe-button" data-timeframe="1H">1H</button><button class="timeframe-button" data-timeframe="4H">4H</button><button class="timeframe-button" data-timeframe="1D">D1</button><button class="timeframe-button" data-timeframe="1W">W1</button>
+        <button class="timeframe-button" data-timeframe="1H">1H</button><button class="timeframe-button" data-timeframe="4H">4H</button><button class="timeframe-button" data-timeframe="8H">8H</button><button class="timeframe-button" data-timeframe="1D">D1</button><button class="timeframe-button" data-timeframe="1W">W1</button>
       </div>
       <label><input id="showTrendEma" type="checkbox" checked> EMA xu hướng</label>
       <label><input id="showSignals" type="checkbox" checked> Tín hiệu</label>
@@ -53,7 +53,7 @@
       <span><i class="legend-swatch legend-trend-up"></i> Uptrend: EMA21 trên EMA55</span><span><i class="legend-swatch legend-trend-down"></i> Downtrend: EMA55 trên EMA21</span><span class="legend-buy">▲ Mua / extS</span><span class="legend-sell">▼ Bán / extL</span><span class="legend-exit">Màu nhạt = tín hiệu chuẩn bị</span>
       <span class="legend-smc-up">BOS/CHoCH tăng</span><span class="legend-smc-down">BOS/CHoCH giảm</span><span class="legend-exit">Premium/Discount/EQ là bối cảnh, không phải tín hiệu độc lập</span>
     </div>
-    <p class="note">Thời gian hiển thị theo GMT+7 (Việt Nam). SMC chỉ dùng nến đã đóng; BOS/CHoCH được xác nhận bằng giá đóng cửa. Di chuyển chuột để xem đường gióng thời gian và giá. Lăn lên để giãn trục X, lăn xuống để co trục X. Giữ chuột trái trong biểu đồ để kéo ngang/dọc; giữ Shift và kéo để đo biến động. Giữ và kéo trực tiếp trên trục giá bên phải để co giãn Y; nhấp đúp để autoscale.</p>
+    <p class="note">Thời gian hiển thị theo GMT+7 (Việt Nam). SMC chỉ dùng nến đã đóng; BOS/CHoCH được xác nhận bằng giá đóng cửa. Trên điện thoại: chụm/mở hai ngón để zoom nến, kéo một ngón để di chuyển biểu đồ. Trên máy tính: lăn chuột để zoom trục X, giữ chuột trái để kéo ngang/dọc; Shift + click đặt điểm đầu phép đo, sau đó click đặt điểm cuối. Kéo trực tiếp trên trục giá bên phải để co giãn Y; nhấp đúp để autoscale.</p>
   </main>
   <script type="module" src="chart.js"></script>
 </body>

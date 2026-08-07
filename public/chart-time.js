@@ -1,7 +1,7 @@
 export const CHART_TIME_ZONE = "Asia/Ho_Chi_Minh";
 
 export function formatChartDate(value, timeframe, timeZone = CHART_TIME_ZONE) {
-  const intraday = timeframe === "1H" || timeframe === "4H";
+  const intraday = timeframe === "1H" || timeframe === "4H" || timeframe === "8H";
   return new Intl.DateTimeFormat("vi-VN", {
     timeZone,
     year: "numeric",

@@ -1,18 +1,30 @@
 import { formatChartDate } from "./chart-time.js";
-import { measurementPointFromCanvas, measurementPointToCanvas, measurementStats } from "./chart-measure.js";
+import {
+  beginMeasurement,
+  completeMeasurement,
+  measurementPointFromCanvas,
+  measurementPointToCanvas,
+  measurementStats,
+  previewMeasurement
+} from "./chart-measure.js";
 import { buildSmcLayers } from "./smc.js";
+import { distanceBetweenPointers, midpointBetweenPointers, pinchBarCount, plotAnchorRatio } from "./chart-gestures.js";
+import { chartReturnUrl, normalizeAppTab } from "./navigation-state.js";
 
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
 let exchange = String(params.get("exchange") || "AUTO").toUpperCase();
 let symbol = String(params.get("symbol") || "BTC").toUpperCase();
-let timeframe = ["1H", "4H", "1D", "1W"].includes(params.get("timeframe")) ? params.get("timeframe") : "1D";
+let timeframe = ["1H", "4H", "8H", "1D", "1W"].includes(params.get("timeframe")) ? params.get("timeframe") : "1D";
+const returnTab = normalizeAppTab(params.get("returnTab"));
 let payload = null;
 let layout = null;
 let yScaleFactor = 1;
 let yCenterOffset = 0;
 let yScaleDrag = null;
 let chartDrag = null;
+let pinchGesture = null;
+const touchPointers = new Map();
 let crosshair = null;
 let measurement = null;
 let smcLayers = null;
@@ -32,15 +44,11 @@ let loadSequence = 0;
 const canvas = $("#chart");
 const context = canvas.getContext("2d");
 const h = value => String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
-$("#backToList").addEventListener("click", event => {
-  if (history.length <= 1) return;
-  event.preventDefault();
-  history.back();
-});
+$("#backToList").href = chartReturnUrl(returnTab);
 const displayType = type => type === "EXT_SHORT" ? "extS" : type === "EXT_LONG" ? "extL" : type;
 const formatPrice = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString("en-US", { maximumSignificantDigits: 9 }) : "—";
 const formatDate = value => formatChartDate(value, timeframe);
-const timeframeMs = () => ({ "1H": 3_600_000, "4H": 14_400_000, "1D": 86_400_000, "1W": 604_800_000 })[timeframe] || 86_400_000;
+const timeframeMs = () => ({ "1H": 3_600_000, "4H": 14_400_000, "8H": 28_800_000, "1D": 86_400_000, "1W": 604_800_000 })[timeframe] || 86_400_000;
 const itemKey = item => `${String(item.exchange).toUpperCase()}:${String(item.symbol || item.instrumentId).toUpperCase()}`;
 
 function readSmcPreferences() {
@@ -409,7 +417,7 @@ function drawSmc() {
 }
 
 function drawCrosshair() {
-  if (!crosshair || !layout || yScaleDrag || chartDrag || measurement?.dragging) return;
+  if (!crosshair || !layout || yScaleDrag || chartDrag || measurement?.placingEnd) return;
   const { margin, width, height, step, startIndex, min, max, plotHeight, plotWidth } = layout;
   const pointerX = Math.min(width - margin.right, Math.max(margin.left, crosshair.x));
   const pointerY = Math.min(height - margin.bottom, Math.max(margin.top, crosshair.y));
@@ -577,7 +585,7 @@ async function load() {
     $("#chartTitle").textContent = `${symbol} · ${timeframe}`;
     const liveBars = data.candles.filter(candle => !candle.isClosed).length;
     $("#chartMeta").textContent = `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
-    history.replaceState(null, "", `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe })}`);
+    history.replaceState(null, "", `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab })}`);
     document.title = `${symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
   } catch (error) {
     if (sequence !== loadSequence) return;
@@ -591,7 +599,7 @@ canvas.addEventListener("mousemove", event => {
   const rect = canvas.getBoundingClientRect();
   const overPriceScale = event.clientX - rect.left >= layout.width - layout.margin.right;
   canvas.classList.toggle("scaling-y", overPriceScale || Boolean(yScaleDrag));
-  if (yScaleDrag || chartDrag || measurement?.dragging) return;
+  if (yScaleDrag || chartDrag || measurement?.placingEnd) return;
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   const insidePlot = x >= layout.margin.left && x < layout.width - layout.margin.right && y >= layout.margin.top && y <= layout.height - layout.margin.bottom;
   crosshair = insidePlot ? { x, y } : null;
@@ -599,12 +607,43 @@ canvas.addEventListener("mousemove", event => {
 });
 canvas.addEventListener("pointerdown", event => {
   if (!layout || (event.pointerType === "mouse" && event.button !== 0)) return;
+  if (event.pointerType === "touch") touchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+  if (touchPointers.size >= 2) {
+    if (!pinchGesture) {
+      const entries = [...touchPointers.entries()].slice(0, 2);
+      const startDistance = distanceBetweenPointers(entries[0][1], entries[1][1]);
+      if (startDistance > 0) {
+        const midpoint = midpointBetweenPointers(entries[0][1], entries[1][1]);
+        const rect = canvas.getBoundingClientRect();
+        pinchGesture = {
+          pointerIds: entries.map(([pointerId]) => pointerId),
+          startDistance,
+          startBarCount: visibleBarCount,
+          anchorRatio: plotAnchorRatio(midpoint.clientX, rect.left, layout.margin.left, layout.width - layout.margin.left - layout.margin.right)
+        };
+        measurement = null; yScaleDrag = null; chartDrag = null; crosshair = null;
+        canvas.classList.remove("dragging-chart", "scaling-y", "measuring-chart");
+        canvas.classList.add("pinching-chart");
+      }
+    }
+    canvas.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const pointerX = event.clientX - rect.left, pointerY = event.clientY - rect.top;
   const insidePlot = pointerX >= layout.margin.left && pointerX < layout.width - layout.margin.right && pointerY >= layout.margin.top && pointerY <= layout.height - layout.margin.bottom;
+  if (measurement?.placingEnd && insidePlot) {
+    const point = measurementPointFromCanvas(pointerX, pointerY, layout);
+    measurement = completeMeasurement(measurement, point);
+    crosshair = null;
+    canvas.classList.remove("measuring-chart");
+    event.preventDefault();
+    return;
+  }
   if (event.shiftKey && insidePlot) {
     const point = measurementPointFromCanvas(pointerX, pointerY, layout);
-    measurement = { start: point, end: point, dragging: true, pointerId: event.pointerId };
+    measurement = beginMeasurement(point);
     crosshair = null;
     canvas.classList.add("measuring-chart");
   } else if (pointerX >= layout.width - layout.margin.right) {
@@ -619,9 +658,19 @@ canvas.addEventListener("pointerdown", event => {
   event.preventDefault();
 });
 canvas.addEventListener("pointermove", event => {
-  if (measurement?.dragging && measurement.pointerId === event.pointerId) {
+  if (event.pointerType === "touch" && touchPointers.has(event.pointerId)) {
+    touchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+  }
+  if (pinchGesture) {
+    const [firstId, secondId] = pinchGesture.pointerIds;
+    const first = touchPointers.get(firstId), second = touchPointers.get(secondId);
+    if (first && second) {
+      const distance = distanceBetweenPointers(first, second);
+      setVisibleBarCount(pinchBarCount(pinchGesture.startBarCount, pinchGesture.startDistance, distance), pinchGesture.anchorRatio);
+    }
+  } else if (measurement?.placingEnd) {
     const rect = canvas.getBoundingClientRect();
-    measurement.end = measurementPointFromCanvas(event.clientX - rect.left, event.clientY - rect.top, layout);
+    measurement = previewMeasurement(measurement, measurementPointFromCanvas(event.clientX - rect.left, event.clientY - rect.top, layout));
     draw();
   } else if (yScaleDrag) {
     const deltaY = event.clientY - yScaleDrag.startY;
@@ -636,10 +685,15 @@ canvas.addEventListener("pointermove", event => {
   event.preventDefault();
 });
 const finishYScaleDrag = event => {
-  if (measurement?.dragging && (event?.pointerId == null || measurement.pointerId === event.pointerId)) measurement.dragging = false;
+  if (event?.pointerType === "touch") touchPointers.delete(event.pointerId);
+  if (pinchGesture && !pinchGesture.pointerIds.includes(event?.pointerId)) {
+    if (event?.pointerId != null && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    return;
+  }
+  if (pinchGesture) pinchGesture = null;
   yScaleDrag = null; chartDrag = null;
-  canvas.classList.remove("dragging-chart");
-  canvas.classList.remove("measuring-chart");
+  canvas.classList.remove("dragging-chart", "pinching-chart");
+  canvas.classList.toggle("measuring-chart", Boolean(measurement?.placingEnd));
   if (event?.pointerId != null && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
 };
 canvas.addEventListener("pointerup", finishYScaleDrag);

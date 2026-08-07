@@ -6,6 +6,23 @@
   "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"],
   "candleLimit": 1000,
   "requestConcurrency": 3,
+  "automation": {
+    "timezone": "Asia/Ho_Chi_Minh",
+    "schedulerPollSeconds": 30
+  },
+  "focus": {
+    "timeframes": ["4H", "8H"],
+    "defaultTimeframe": "4H",
+    "retentionDays": 7,
+    "scanHours": [3, 7, 11, 15, 19, 23]
+  },
+  "newCoins": {
+    "timeframe": "8H",
+    "exchangePriority": ["BINANCE", "OKX", "BYBIT"],
+    "scanHours": [7, 15, 23],
+    "scanMinute": 5,
+    "minimumCandles": 61
+  },
   "dex": {
     "quotePriority": ["USDT", "USDC"],
     "minimumLiquidityUsd": 100000,

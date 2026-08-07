@@ -1,5 +1,99 @@
 # Changelog
 
+## 3.0.1 - 2026-08-07
+
+- Phát hành chính thức scheduler và Telegram cho Coin mới trên nến `8H` đã đóng tại `07:05 · 15:05 · 23:05` giờ Việt Nam.
+- Tự dò và ghim cặp Spot theo thứ tự `Binance → OKX → Bybit`; coin tạm dừng bị loại trước khi gọi API sàn.
+- Chống gửi trùng theo sàn, cặp, nến, chiều và loại tín hiệu; chạy thủ công không ghi khóa của scheduler.
+- Telegram chỉ báo loại lỗi và số lượng; chi tiết exception chỉ ghi trong log server.
+- Chart 8H hiển thị nến đang chạy, trong khi Signal và scheduler vẫn chỉ dùng nến đã đóng.
+- Hoàn tất sửa giao diện Coin mới, các hàng Automation và nút chạy Coin mới 8H trong phần Tự động.
+- Giữ nguyên cấu hình production về `.env.example`, port, PM2 và Nginx.
+- Automated test: 103/103 đạt; kiểm tra cú pháp, HTTP health và kiểm thử thực tế trên subdomain đạt.
+
+## 3.0.1-dev.1.3 - 2026-08-07
+
+- Sửa nút **Chạy Coin mới 8H** trong phần Tự động: gọi trực tiếp cùng API quét đã hoạt động ở tab Coin mới, không còn bị chặn bởi bước lưu toàn bộ form Automation.
+- Tách kế hoạch dispatch scheduler thành mô-đun kiểm thử được; xác nhận job Coin mới chỉ được gọi khi master Automation bật, lịch Coin mới bật và đúng mốc giờ cấu hình.
+- Chuyển múi giờ cố định và chu kỳ kiểm tra scheduler vào `config.json`; lịch Coin mới tiếp tục đọc `scanHours` và `scanMinute` từ file này.
+- Không thay đổi Signal, Telegram, chống gửi trùng, nến 8H hoặc cấu hình port/PM2/Nginx.
+- Automated test: 103/103 đạt; kiểm tra cú pháp đạt.
+
+## 3.0.1-dev.1.2 - 2026-08-07
+
+- Bỏ trường chọn sàn ở tab Coin mới; chỉ cần nhập mã coin hoặc cặp Spot.
+- Tự dò và ghim thị trường đầu tiên theo thứ tự cấu hình `Binance → OKX → Bybit`; nếu nhập rõ quote như `USDC`, hệ thống giữ đúng quote đó.
+- Thiết kế lại lưới form Coin mới và toàn bộ hàng Lịch chạy để căn thẳng trên desktop, tablet và mobile.
+- Biểu đồ 8H hiển thị nến đang chạy giống D1; Signal và scheduler vẫn chỉ dùng nến đã đóng.
+- Giữ nguyên dữ liệu Coin mới cũ, scheduler 8H, Telegram, chống gửi trùng và cấu hình production.
+- Automated test: 100/100 đạt; kiểm tra cú pháp đạt.
+
+## 3.0.1-dev.1.1 - 2026-08-06
+
+- Sửa trường `Cặp Spot` bị đội lên do kế thừa `margin-bottom` của input chung; nhãn và ô nhập giờ thẳng hàng với trường `Sàn`.
+- Giữ nguyên toàn bộ scheduler, Telegram, chống gửi trùng và cấu hình production của `3.0.1-dev.1` đã kiểm thử.
+- Automated test: 95/95 đạt; kiểm tra cú pháp đạt.
+
+## 3.0.1-dev.1 - 2026-08-06
+
+- Thêm scheduler riêng cho watchlist Coin mới trên nến `8H` đã đóng tại `07:05 · 15:05 · 23:05` giờ Việt Nam.
+- Dùng lại Signal và khóa chống gửi trùng hiện có; khóa gồm đúng sàn, cặp, nến, chiều và loại tín hiệu.
+- Bỏ coin tạm dừng trước khi gọi API sàn; không tự đổi sang sàn khác đối với cặp đã ghim.
+- Thêm nút quét Coin mới 8H thủ công để kiểm thử Telegram ngay.
+- Telegram chỉ hiển thị loại lỗi và số lượng; chi tiết exception tiếp tục chỉ ghi log server.
+- Lịch 8H được tập trung trong `config.json`; cấu hình Automation được nâng tương thích lên schema v4.
+- Ngưỡng Coin mới là 61 nến 8H (khoảng 20 ngày), đủ cho EMA55/Signal; scanner cũ vẫn giữ ngưỡng 100 nến.
+- Automated test: 95/95 đạt; kiểm tra cú pháp và HTTP health đạt.
+
+## 3.0.0 - 2026-08-06
+
+- Phát hành chính thức khung `8H`, được tổng hợp từ đúng hai nến `4H` đã đóng của cùng sàn/cặp.
+- Dùng lại EMA, Signal và SMC hiện có trên nến 8H; hiển thị đúng giờ mở nến theo GMT+7.
+- Thêm tab Coin mới với watchlist riêng, ghim sàn/cặp Spot, thêm/xóa/tạm dừng và không tự hết hạn.
+- Giữ đúng tab khi reload hoặc quay lại từ chart; reload chủ động không phục hồi kết quả quét CEX/DEX cũ.
+- Đổi Theo dõi 7 ngày sang `4H · 8H`, mặc định `4H`, và đưa cấu hình liên quan vào `config.json`.
+- Đổi phép đo chart sang `Shift + click` tại điểm đầu rồi click tại điểm cuối; `Esc` vẫn xóa phép đo.
+- Chưa bật scheduler/Telegram riêng cho Coin mới; hạng mục này được chuyển sang mốc tiếp theo.
+
+## 3.0.0-dev.2.1 - 2026-08-06
+
+- Giữ tab đang chọn qua reload; chart mở từ Coin mới hoặc Theo dõi 7 ngày quay lại đúng tab nguồn.
+- Kết quả quét CEX/DEX chỉ được phục hồi khi điều hướng sang chart rồi quay lại; reload chủ động sẽ xóa kết quả cũ.
+- Đổi Theo dõi 7 ngày sang khung `4H · 8H`, mặc định `4H`; dữ liệu `1H` cũ được chuyển an toàn sang mặc định mới.
+- Đưa khung cho phép, khung mặc định, số ngày giữ và các giờ quét vào `config.json`.
+- Khung theo dõi `8H` lấy nến nguồn `4H` và dùng lại engine tổng hợp 8H đã kiểm thử.
+
+## 3.0.0-dev.2 - 2026-08-06
+
+- Thêm tab Coin mới và watchlist lưu riêng trong `DATA_DIR/new-coin-watchlist.json`.
+- Cho phép thêm thủ công, tạm dừng/tiếp tục và xóa; coin không tự hết hạn.
+- Bắt buộc chọn sàn cụ thể, kiểm tra cặp Spot đang giao dịch và ghim cố định đúng sàn/cặp.
+- Chặn thêm trùng cùng một định danh `sàn:cặp`.
+- Click coin mở trực tiếp chart 8H; vẫn có thể chuyển sang 1H và 4H để tìm điểm vào.
+- Chưa thêm scheduler hoặc Telegram 8H; các phần này được giữ cho dev.3.
+
+## 3.0.0-dev.1.1 - 2026-08-06
+
+- Đổi phép đo từ `Shift + kéo` sang `Shift + click` để đặt điểm đầu và click lần hai để đặt điểm cuối.
+- Cho phép thả phím Shift ngay sau điểm đầu; phép đo vẫn theo con trỏ cho tới click hoàn tất.
+- Giữ phím `Esc` để xóa phép đo và không thay đổi thao tác kéo/zoom biểu đồ.
+- Sửa nhãn trục X của khung 8H để hiển thị cả ngày và giờ mở nến theo GMT+7.
+
+## 3.0.0-dev.1 - 2026-08-06
+
+- Thêm tổng hợp nến 8H từ đúng hai nến 4H đã đóng theo ranh giới UTC.
+- Bỏ qua bucket 8H nếu thiếu nến, trùng open time hoặc còn nến 4H đang chạy.
+- Thêm khung 8H vào API và workspace chart CEX.
+- Chưa thêm watchlist Coin mới, scheduler hoặc Telegram 8H trong bản dev này.
+
+## 2.9.2 - 2026-08-06
+
+- Thêm thao tác chụm/mở hai ngón để zoom số nến hiển thị trên điện thoại.
+- Giữ điểm neo zoom theo vị trí giữa hai ngón tay để khu vực đang xem không bị trôi khỏi màn hình.
+- Giữ thao tác kéo biểu đồ bằng một ngón và zoom con lăn trên máy tính như v2.9.1.
+- Chặn cuộn/overscroll trang ngoài ý muốn khi thao tác trực tiếp trên canvas.
+- Thêm kiểm thử đơn vị cho phép tính khoảng cách, trung điểm, tỷ lệ neo và mức zoom cảm ứng.
+
 ## 2.9.1 - 2026-08-05
 
 - Job theo dõi khung nhỏ tự thử lại cùng sàn hai lần khi timeout, lỗi mạng, `429` hoặc `5xx`.
@@ -134,3 +228,9 @@
 - Thêm giao diện thêm, xem, gia hạn, xóa và quét ngay danh sách theo dõi.
 - Nâng cấu hình runtime lên schema v3, tự đọc cấu hình cũ.
 - Thêm kiểm thử cho adapter mới và vòng đời danh sách theo dõi.
+# 3.0.0-dev.1
+
+- Thêm tổng hợp nến 8H từ đúng hai nến 4H đã đóng theo ranh giới UTC.
+- Bỏ qua bucket 8H nếu thiếu nến, trùng open time hoặc còn nến 4H đang chạy.
+- Thêm khung 8H vào API và workspace chart CEX.
+- Chưa thêm watchlist Coin mới, scheduler hoặc Telegram 8H trong bản dev này.

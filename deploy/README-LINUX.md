@@ -96,13 +96,14 @@ pm2 logs trading-signal --lines 100
 
 Nếu `git status --short` hiển thị file source đã sửa trực tiếp trên server, dừng trước `git pull` và lưu lại phần sửa đó. Không dùng `git reset --hard`.
 
-`.env`, watchlist, lịch sử Telegram và danh sách theo dõi 7 ngày nằm ngoài source trong `DATA_DIR`, nên không bị ảnh hưởng bởi `git pull`. Schema cấu hình cũ được chuyển sang schema v3 khi đọc; không cần xóa hoặc tạo lại `automation.json`.
+`.env`, watchlist, lịch sử Telegram và danh sách theo dõi nằm ngoài source trong `DATA_DIR`, nên không bị ảnh hưởng bởi `git pull`. Schema cấu hình cũ được chuyển tương thích sang schema v4 khi đọc; không cần xóa hoặc tạo lại `automation.json`.
 
 Sau cập nhật, đăng nhập <https://trading.abc.net> rồi kiểm tra theo thứ tự:
 
-1. `/api/health` trả phiên bản `2.5.2`.
+1. `/api/health` trả phiên bản `3.0.1`.
 2. Quét thử BTC trên D1 và xác nhận sàn là Binance.
 3. Chọn một tín hiệu D1 và thêm vào **Theo dõi 7 ngày**.
 4. Bấm **Quét điểm vào ngay**.
-5. Kiểm tra lịch khung nhỏ bật tại phút thứ 5 mỗi giờ.
-6. Chỉ sau đó mới để scheduler chạy tự động.
+5. Mở tab **Coin mới**, kiểm tra watchlist và chart `8H`.
+6. Kiểm tra lịch Theo dõi 7 ngày dùng đúng khung `4H` hoặc `8H`.
+7. Chạy thủ công Coin mới 8H và xác nhận Telegram; sau đó mới bật scheduler tự động.

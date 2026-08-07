@@ -1,13 +1,13 @@
 {
   "name": "trading-signal",
-  "version": "2.9.1",
+  "version": "3.0.1",
   "private": true,
   "type": "module",
   "description": "Multi-asset closed-candle signal scanner with Telegram automation.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check public/app.js && node --check public/chart.js && node --check public/chart-time.js && node --check public/chart-measure.js && node --check public/smc.js && node --check public/login.js && node --check scripts/generate-auth.js && node --check lib/auth.js && node --check lib/automation-store.js && node --check lib/focus-store.js && node --check lib/market.js && node --check lib/quotes.js && node --check lib/market-catalog.js && node --check lib/automation-signals.js && node --check lib/signal-groups.js && node --check lib/scan-errors.js && node --check lib/telegram.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/chart.js && node --check public/navigation-state.js && node --check public/chart-time.js && node --check public/chart-measure.js && node --check public/chart-gestures.js && node --check public/smc.js && node --check public/login.js && node --check scripts/generate-auth.js && node --check lib/auth.js && node --check lib/automation-store.js && node --check lib/automation-schedule.js && node --check lib/focus-config.js && node --check lib/focus-store.js && node --check lib/new-coin-config.js && node --check lib/new-coin-automation.js && node --check lib/new-coin-store.js && node --check lib/candles.js && node --check lib/market.js && node --check lib/quotes.js && node --check lib/market-catalog.js && node --check lib/automation-signals.js && node --check lib/signal-groups.js && node --check lib/scan-errors.js && node --check lib/telegram.js",
     "generate-auth": "node scripts/generate-auth.js"
   },
   "engines": {

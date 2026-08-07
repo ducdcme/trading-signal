@@ -1,5 +1,19 @@
 # Tự động hóa và Telegram
 
+## Trạng thái v3.0.1
+
+- Nến 8H đã được tổng hợp từ đúng hai nến 4H đã đóng theo ranh giới UTC.
+- Chart 8H đã hiển thị nến đang chạy giống D1; scheduler vẫn chỉ dùng nến đóng.
+- Watchlist Coin mới đã tách riêng, hỗ trợ thêm/xóa/tạm dừng và ghim đúng sàn/cặp Spot.
+- Coin mới không tự hết hạn; click mở trực tiếp chart 8H.
+- Tab nguồn được giữ qua reload và khi quay lại từ chart.
+- Theo dõi 7 ngày dùng `4H · 8H`, mặc định `4H`; các lựa chọn và giờ quét đọc từ `config.json`.
+- v3.0.0 đã được nghiệm thu ở mức nền tảng Coin mới và chart 8H.
+- v3.0.1-dev.1 đã pass checklist scheduler 8H, Telegram, chống gửi trùng, bỏ qua coin tạm dừng và hồi quy.
+- v3.0.1-dev.1.2 bỏ chọn sàn khi thêm Coin mới, tự dò `Binance → OKX → Bybit`, đồng thời thiết kế lại form Coin mới và các hàng Lịch chạy; giao diện đã pass.
+- v3.0.1-dev.1.3 sửa nút chạy Coin mới 8H trong phần Tự động, kiểm thử luồng dispatch scheduler và đưa thông số thời gian cố định vào `config.json`.
+- v3.0.1 đã pass chạy tay và một mốc scheduler thực tế, được đóng chính thức để thay v2.9.2 trên production.
+
 Phiên bản 2.1 đã có scheduler, cấu hình watchlist qua giao diện, gửi Telegram, chạy thử thủ công và chống gửi trùng. Chỉ bật lịch thật sau khi tín hiệu CEX/DEX đã được đối chiếu ổn định.
 
 Phiên bản 2.2 đổi tên ứng dụng thành **Trading Signal**, thêm schema đa tài sản và các vùng cấu hình `stocks`, `stockDaily`, `stockWeekly`. Các vùng Stock vẫn tắt cho đến khi có adapter dữ liệu SSI và kiểm thử dữ liệu điều chỉnh.

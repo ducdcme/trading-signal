@@ -16,6 +16,18 @@ export function measurementPointToCanvas(point, layout) {
   };
 }
 
+export function beginMeasurement(point) {
+  return { start: point, end: point, placingEnd: true };
+}
+
+export function previewMeasurement(measurement, point) {
+  return { ...measurement, end: point };
+}
+
+export function completeMeasurement(measurement, point) {
+  return { ...measurement, end: point, placingEnd: false };
+}
+
 export function measurementStats(start, end) {
   const delta = end.price - start.price;
   const percent = start.price === 0 ? null : delta / start.price * 100;

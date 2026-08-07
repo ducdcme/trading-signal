@@ -1,4 +1,5 @@
 import { parseSymbols } from "./symbols.js";
+import { initialAppTab, normalizeAppTab, shouldRestoreScanCache } from "./navigation-state.js";
 
 const $ = selector => document.querySelector(selector);
 const h = value => String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -6,9 +7,10 @@ const date = timestamp => new Intl.DateTimeFormat("vi-VN", { timeZone: "UTC", ye
 const price = value => Number.isFinite(value) ? value.toLocaleString("en-US", { maximumSignificantDigits: 10 }) : "—";
 const shortAddress = value => value?.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 const signalTypes = row => [...(row.buyTypes ?? []), ...(row.sellTypes ?? []), ...(row.warnings ?? []), ...(row.exitTypes ?? []), ...(row.trendTypes ?? [])];
-const chartUrl = (exchange, symbol, timeframe = "1D") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe })}`;
+const chartUrl = (exchange, symbol, timeframe = "1D", returnTab = "cex") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab: normalizeAppTab(returnTab) })}`;
 const scanCacheKeys = { cex: "trading-signal:cex-scan:v1", dex: "trading-signal:dex-scan:v1" };
 const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
+const activeTabKey = "trading-signal:active-tab:v1";
 
 function saveChartWorkspace(link) {
   const container = link.closest("tbody") || document;
@@ -41,6 +43,22 @@ function readScanCache(type) {
   catch { return null; }
 }
 
+function readActiveTab() {
+  try { return sessionStorage.getItem(activeTabKey); }
+  catch { return null; }
+}
+
+function activateTab(value, updateUrl = false) {
+  const tabName = normalizeAppTab(value);
+  document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.tab === tabName));
+  document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === `panel-${tabName}`));
+  try { sessionStorage.setItem(activeTabKey, tabName); } catch { /* URL hash vẫn giữ được tab. */ }
+  if (updateUrl) history.replaceState(history.state, "", `${location.pathname}${location.search}#${tabName}`);
+}
+
+document.querySelectorAll(".tab").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.tab, true)));
+activateTab(initialAppTab(location.hash, readActiveTab()), !location.hash);
+
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   location.replace("/login.html");
@@ -48,17 +66,20 @@ $("#logout").addEventListener("click", async () => {
 
 const config = await fetch("/api/config").then(response => response.json());
 $("#symbols").value = config.symbols.join(", ");
+const focusTimeframes = config.focus?.timeframes?.length ? config.focus.timeframes : ["4H", "8H"];
+const newCoinTimeframe = config.newCoins?.timeframe || "8H";
+const newCoinScanTimes = (config.newCoins?.scanHours || [7, 15, 23]).map(hour => `${String(hour).padStart(2, "0")}:${String(config.newCoins?.scanMinute ?? 5).padStart(2, "0")}`);
+$("#focusDefaultTimeframe").innerHTML = focusTimeframes.map(value => `<option value="${h(value)}">${h(value)}</option>`).join("");
+$("#focusDefaultTimeframe").value = focusTimeframes.includes(config.focus?.defaultTimeframe) ? config.focus.defaultTimeframe : focusTimeframes[0];
+document.querySelectorAll(".focus-timeframes-label").forEach(element => { element.textContent = focusTimeframes.join("/"); });
+$("#newCoinScheduleTimes").textContent = newCoinScanTimes.join(" · ");
+$("#automationTimezone").textContent = config.automation?.timezone || "Asia/Ho_Chi_Minh";
 if (!config.capabilities?.dexWeekly) {
   $("#dexWeeklyOption").disabled = true;
   $("#dexWeeklyOption").textContent = "W1 · cần CoinGecko Analyst key";
 }
 
 let automationSnapshot = await fetch("/api/automation").then(response => response.json());
-
-document.querySelectorAll(".tab").forEach(button => button.addEventListener("click", () => {
-  document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab === button));
-  document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === `panel-${button.dataset.tab}`));
-}));
 
 async function importTextFile(input, state, onLoaded) {
   const file = input.files[0];
@@ -115,7 +136,7 @@ function renderCexResults(data, restored = false) {
   $("#results").innerHTML = lastCexResults.map((row, index) => {
     const focusButtons = data.timeframe === "1D" && ["BUY", "SELL", "BOTH"].includes(row.status) ? `${row.buySignalTypes?.length ? `<button class="focus-action" data-focus-index="${index}" data-direction="BUY">+ BUY</button>` : ""}${row.sellSignalTypes?.length ? `<button class="focus-action sell-action" data-focus-index="${index}" data-direction="SELL">+ SELL</button>` : ""}` : "—";
     const symbol = row.instrumentId || row.requestedSymbol;
-    const chart = row.status !== "ERROR" && row.status !== "SKIPPED" ? `<a class="chart-link" data-chart-exchange="${h(row.exchange)}" data-chart-symbol="${h(symbol)}" data-chart-timeframe="${h(data.timeframe)}" href="${h(chartUrl(row.exchange, symbol, data.timeframe))}">${h(symbol)}</a>` : `<strong>${h(symbol)}</strong>`;
+    const chart = row.status !== "ERROR" && row.status !== "SKIPPED" ? `<a class="chart-link" data-chart-exchange="${h(row.exchange)}" data-chart-symbol="${h(symbol)}" data-chart-timeframe="${h(data.timeframe)}" href="${h(chartUrl(row.exchange, symbol, data.timeframe, "cex"))}">${h(symbol)}</a>` : `<strong>${h(symbol)}</strong>`;
     return `<tr><td>${chart}</td><td><span class="exchange ${h(String(row.exchange).toLowerCase())}">${h(row.exchange)}</span></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(row.error || signalTypes(row).join(", ") || "—")}</td><td>${price(row.close)}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td><td class="row-actions">${focusButtons}</td></tr>`;
   }).join("");
   $("#state").textContent = `${restored ? "Kết quả gần nhất" : "Đã quét"} ${data.results.length} cặp · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
@@ -170,13 +191,18 @@ $("#scanDex").addEventListener("click", async () => {
   finally { button.disabled = false; }
 });
 
-const cachedCex = readScanCache("cex");
+const navigationType = performance.getEntriesByType?.("navigation")?.[0]?.type || (performance.navigation?.type === 1 ? "reload" : "navigate");
+if (!shouldRestoreScanCache(navigationType)) {
+  try { Object.values(scanCacheKeys).forEach(key => sessionStorage.removeItem(key)); } catch { /* Không có sessionStorage thì không có cache cần xóa. */ }
+}
+
+const cachedCex = shouldRestoreScanCache(navigationType) ? readScanCache("cex") : null;
 if (cachedCex?.data?.results?.length) {
   $("#symbols").value = cachedCex.symbols || $("#symbols").value;
   $("#cexTimeframe").value = cachedCex.timeframe || cachedCex.data.timeframe || "1D";
   renderCexResults(cachedCex.data, true);
 }
-const cachedDex = readScanCache("dex");
+const cachedDex = shouldRestoreScanCache(navigationType) ? readScanCache("dex") : null;
 if (cachedDex?.data?.results?.length) {
   $("#dexTokens").value = cachedDex.tokens || "";
   $("#dexTimeframe").value = cachedDex.timeframe || cachedDex.data.timeframe || "1D";
@@ -184,8 +210,8 @@ if (cachedDex?.data?.results?.length) {
 }
 
 function renderLastRuns(lastRuns = {}) {
-  const rows = ["crypto:1D", "crypto:1W", "focus"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
-    const timeframe = key === "focus" ? "Theo dõi 1H/4H" : (run.timeframe || key.slice(7));
+  const rows = ["crypto:1D", "crypto:1W", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
+    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : (run.timeframe || key.slice(7));
     const detail = run.status === "ERROR" ? `Lỗi: ${run.error}` : `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
@@ -203,6 +229,7 @@ function fillAutomation(data) {
   $("#weeklyTime").value = settings.schedules.cryptoWeekly.time;
   $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
   $("#focusMinute").value = String(settings.schedules.focusScan.minute);
+  $("#newCoinScheduleEnabled").checked = settings.schedules.newCoinScan.enabled;
   $("#sendNoSignalSummary").checked = settings.telegram.sendNoSignalSummary;
   $("#autoCexEnabled").checked = settings.assets.cex.enabled;
   $("#autoDexEnabled").checked = settings.assets.dex.enabled;
@@ -216,7 +243,7 @@ function fillAutomation(data) {
 
 function collectAutomation() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     enabled: $("#automationEnabled").checked,
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
@@ -232,6 +259,7 @@ function collectAutomation() {
       cryptoDaily: { enabled: $("#dailyEnabled").checked, time: $("#dailyTime").value },
       cryptoWeekly: { enabled: $("#weeklyEnabled").checked, day: Number($("#weeklyDay").value), time: $("#weeklyTime").value },
       focusScan: { enabled: $("#focusScheduleEnabled").checked, minute: Number($("#focusMinute").value) },
+      newCoinScan: { enabled: $("#newCoinScheduleEnabled").checked },
       stockDaily: automationSnapshot.settings.schedules.stockDaily,
       stockWeekly: automationSnapshot.settings.schedules.stockWeekly
     }
@@ -267,9 +295,71 @@ async function loadFocusList() {
   $("#focusCount").textContent = `${data.items.filter(item => item.expiresAt > data.now).length} coin đang chạy`;
   $("#focusResults").innerHTML = data.items.length ? data.items.sort((a, b) => a.expiresAt - b.expiresAt).map(item => {
     const active = item.expiresAt > data.now;
-    return `<tr><td><a class="chart-link" data-chart-exchange="${h(item.exchange)}" data-chart-symbol="${h(item.instrumentId)}" data-chart-timeframe="${h(item.timeframe)}" href="${h(chartUrl(item.exchange, item.instrumentId, item.timeframe))}">${h(item.asset)}</a></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${h(item.direction.toLowerCase())}">${h(item.direction)}</span></td><td>${h(item.timeframe)}</td><td class="${active ? "active-time" : "expired"}">${h(remainingText(item.expiresAt, data.now))}</td><td class="row-actions"><button class="secondary focus-action" data-extend="${h(item.asset)}">+7 ngày</button><button class="focus-action sell-action" data-delete="${h(item.asset)}">Xóa</button></td></tr>`;
+    return `<tr><td><a class="chart-link" data-chart-exchange="${h(item.exchange)}" data-chart-symbol="${h(item.instrumentId)}" data-chart-timeframe="${h(item.timeframe)}" href="${h(chartUrl(item.exchange, item.instrumentId, item.timeframe, "focus"))}">${h(item.asset)}</a></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${h(item.direction.toLowerCase())}">${h(item.direction)}</span></td><td>${h(item.timeframe)}</td><td class="${active ? "active-time" : "expired"}">${h(remainingText(item.expiresAt, data.now))}</td><td class="row-actions"><button class="secondary focus-action" data-extend="${h(item.asset)}">+7 ngày</button><button class="focus-action sell-action" data-delete="${h(item.asset)}">Xóa</button></td></tr>`;
   }).join("") : `<tr><td colspan="6">Chưa có coin nào. Sau khi quét D1, bấm “+ BUY” hoặc “+ SELL” ở tín hiệu bạn muốn theo dõi.</td></tr>`;
 }
+
+function formatAddedAt(timestamp) {
+  return new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(timestamp);
+}
+
+async function loadNewCoinList(message = "") {
+  const data = await api("/api/new-coins");
+  const activeCount = data.items.filter(item => !item.paused).length;
+  $("#newCoinCount").textContent = `${data.items.length} coin · ${activeCount} hoạt động`;
+  $("#newCoinResults").innerHTML = data.items.length ? [...data.items].sort((a, b) => b.addedAt - a.addedAt).map(item => {
+    const encodedId = h(item.id);
+    const status = item.paused ? "TẠM DỪNG" : "HOẠT ĐỘNG";
+    return `<tr><td><strong>${h(item.asset)}</strong></td><td><span class="exchange ${h(item.exchange.toLowerCase())}">${h(item.exchange)}</span><small>${h(item.instrumentId)}</small></td><td><span class="badge ${item.paused ? "paused" : "running"}">${status}</span></td><td>${h(formatAddedAt(item.addedAt))}</td><td><a class="chart-link" data-chart-exchange="${h(item.exchange)}" data-chart-symbol="${h(item.instrumentId)}" data-chart-timeframe="8H" href="${h(chartUrl(item.exchange, item.instrumentId, "8H", "new-coins"))}">Mở 8H</a><small>có 1H · 4H · 8H</small></td><td class="row-actions"><button class="secondary new-coin-action" data-new-coin-pause="${encodedId}" data-paused="${item.paused}">${item.paused ? "Tiếp tục" : "Tạm dừng"}</button><button class="new-coin-action delete" data-new-coin-delete="${encodedId}">Xóa</button></td></tr>`;
+  }).join("") : '<tr><td colspan="6">Chưa có coin mới. Nhập mã coin hoặc cặp Spot để hệ thống tự tìm sàn.</td></tr>';
+  if (message) $("#newCoinState").textContent = message;
+}
+
+$("#newCoinForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const button = $("#addNewCoin");
+  button.disabled = true;
+  $("#newCoinState").textContent = "Đang kiểm tra cặp Spot…";
+  try {
+    const instrumentId = $("#newCoinSymbol").value.trim().toUpperCase();
+    const result = await api("/api/new-coins", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ instrumentId }) });
+    $("#newCoinSymbol").value = "";
+    await loadNewCoinList(`Đã tìm thấy và ghim ${result.entry.exchange}:${result.entry.instrumentId}.`);
+  } catch (error) { $("#newCoinState").textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
+$("#newCoinResults").addEventListener("click", async event => {
+  const pause = event.target.closest("[data-new-coin-pause]");
+  const remove = event.target.closest("[data-new-coin-delete]");
+  if (!pause && !remove) return;
+  const button = pause || remove;
+  button.disabled = true;
+  try {
+    if (pause) {
+      const paused = pause.dataset.paused !== "true";
+      await api(`/api/new-coins/${encodeURIComponent(pause.dataset.newCoinPause)}/pause`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ paused }) });
+      await loadNewCoinList(paused ? "Đã tạm dừng coin; dữ liệu vẫn được giữ." : "Đã đưa coin trở lại trạng thái hoạt động.");
+    } else {
+      await api(`/api/new-coins/${encodeURIComponent(remove.dataset.newCoinDelete)}`, { method: "DELETE" });
+      await loadNewCoinList("Đã xóa coin khỏi watchlist Coin mới.");
+    }
+  } catch (error) { $("#newCoinState").textContent = `Lỗi: ${error.message}`; button.disabled = false; }
+});
+
+async function runNewCoinsNow(button, stateTarget = $("#newCoinState")) {
+  button.disabled = true;
+  stateTarget.textContent = `Đang quét Coin mới ${newCoinTimeframe} và gửi Telegram…`;
+  try {
+    const result = await api("/api/new-coins/run", { method: "POST" });
+    stateTarget.textContent = `Đã quét ${result.total} coin · bỏ qua ${result.paused} tạm dừng · gửi ${result.sentSignals} tín hiệu · ${result.errors} lỗi.`;
+    automationSnapshot = await api("/api/automation");
+    renderLastRuns(automationSnapshot.state.lastRuns);
+  } catch (error) { stateTarget.textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+
+$("#runNewCoinsNow").addEventListener("click", event => runNewCoinsNow(event.currentTarget));
 
 $("#focusResults").addEventListener("click", async event => {
   const extend = event.target.closest("[data-extend]");
@@ -285,7 +375,7 @@ $("#focusResults").addEventListener("click", async event => {
 });
 
 $("#runFocusNow").addEventListener("click", async event => {
-  const button = event.currentTarget; button.disabled = true; $("#focusState").textContent = "Đang quét 1H/4H…";
+  const button = event.currentTarget; button.disabled = true; $("#focusState").textContent = `Đang quét ${focusTimeframes.join("/")}…`;
   try {
     const result = await api("/api/focus/run", { method: "POST" });
     $("#focusState").textContent = `Đã quét ${result.total} coin · khớp ${result.matchedSignals} · gửi ${result.sentSignals} cảnh báo.`;
@@ -294,6 +384,7 @@ $("#runFocusNow").addEventListener("click", async event => {
 });
 
 await loadFocusList();
+await loadNewCoinList();
 
 $("#autoCexFile").addEventListener("change", () => importTextFile($("#autoCexFile"), $("#autoFileState"), (text, name) => {
   const symbols = parseSymbols(text);
@@ -352,3 +443,6 @@ async function runNow(timeframe, button) {
 
 $("#runDailyNow").addEventListener("click", event => runNow("1D", event.currentTarget));
 $("#runWeeklyNow").addEventListener("click", event => runNow("1W", event.currentTarget));
+$("#runNewCoinsAutomationNow").addEventListener("click", async event => {
+  await runNewCoinsNow(event.currentTarget, $("#automationState"));
+});

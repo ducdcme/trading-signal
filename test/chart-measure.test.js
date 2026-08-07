@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { measurementPointFromCanvas, measurementPointToCanvas, measurementStats } from "../public/chart-measure.js";
+import {
+  beginMeasurement,
+  completeMeasurement,
+  measurementPointFromCanvas,
+  measurementPointToCanvas,
+  measurementStats,
+  previewMeasurement
+} from "../public/chart-measure.js";
 
 const layout = {
   margin: { left: 10, right: 70, top: 20, bottom: 40 },
@@ -32,4 +39,18 @@ test("measurement calculates rising and falling percentages", () => {
     rising: true
   });
   assert.equal(measurementStats({ virtualIndex: 15, price: 100 }, { virtualIndex: 11, price: 90 }).rising, false);
+});
+
+test("measurement remains active after the Shift start click", () => {
+  const start = { virtualIndex: 10, price: 80 };
+  assert.deepEqual(beginMeasurement(start), { start, end: start, placingEnd: true });
+});
+
+test("measurement previews without Shift and completes on the next click", () => {
+  const start = { virtualIndex: 10, price: 80 };
+  const preview = { virtualIndex: 13, price: 90 };
+  const end = { virtualIndex: 15, price: 100 };
+  const active = previewMeasurement(beginMeasurement(start), preview);
+  assert.deepEqual(active, { start, end: preview, placingEnd: true });
+  assert.deepEqual(completeMeasurement(active, end), { start, end, placingEnd: false });
 });

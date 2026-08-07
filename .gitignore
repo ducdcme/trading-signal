@@ -4,3 +4,4 @@ node_modules/
 data/automation.json
 data/automation-state.json
 data/focus-watchlist.json
+data/new-coin-watchlist.json

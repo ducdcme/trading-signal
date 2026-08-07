@@ -1,6 +1,6 @@
 # Trading Signal
 
-Phiên bản hiện tại: **2.9.1**. Click mã coin trong kết quả quét để gửi cả danh sách sang workspace biểu đồ. Sidebar bên phải cho phép đổi coin tại chỗ, xem giá hiện tại và mức thay đổi so với giá đóng cửa D1 trước, đồng thời thêm/xóa coin mà không ảnh hưởng danh sách quét Telegram. Biểu đồ nến Nhật, EMA xu hướng và tín hiệu Pine hỗ trợ `1H`, `4H`, `D1`, `W1`, nến đang chạy, kéo ngang/dọc, zoom trục X bằng con lăn, co giãn trục Y và khoảng trống tương lai tối đa gần nửa khung. SMC hỗ trợ Swing/Internal Structure, BOS/CHoCH, Order Block, FVG, Equal High/Equal Low và Premium/Discount/Equilibrium trên dữ liệu nến đã đóng; mỗi lớp có thể bật/tắt riêng, EQH/EQL được bật mặc định. Giữ `Shift` và kéo chuột để đo chênh lệch giá/phần trăm, nhấn `Esc` để xóa hình đo. Nhãn thời gian biểu đồ hiển thị theo GMT+7 (Việt Nam).
+Phiên bản chính thức: **3.0.1**. Bản này bổ sung scheduler và Telegram cho Coin mới 8H, hoàn tất thao tác chạy tay trong phần Tự động và kiểm thử dispatch scheduler thực tế. Biểu đồ nến Nhật, EMA, Signal và SMC tiếp tục dùng chung engine hiện có trên `1H`, `4H`, `8H`, `D1`, `W1`; không thay đổi các cấu hình production về port, PM2, Nginx hoặc `.env.example`.
 
 Ứng dụng quét tín hiệu đa tài sản trên dữ liệu nến đã đóng. Hiện tại CEX Crypto và DEX Crypto hoạt động; kiến trúc đã dành sẵn provider, watchlist và lịch riêng cho chứng khoán Việt Nam.
 
@@ -85,16 +85,16 @@ Có thể thử ngay bằng file `sample-watchlist.txt` đi kèm dự án.
 
 ## Theo dõi điểm vào 7 ngày
 
-Scanner D1 chỉ phát hiện và hiển thị tín hiệu; không tự đưa mọi tín hiệu vào danh sách theo dõi. Sau khi tự đánh giá, bấm **+ BUY** hoặc **+ SELL** tại đúng dòng D1 cần quan sát. Khung mặc định là 1H và có thể đổi sang 4H trước khi thêm.
+Scanner D1 chỉ phát hiện và hiển thị tín hiệu; không tự đưa mọi tín hiệu vào danh sách theo dõi. Sau khi tự đánh giá, bấm **+ BUY** hoặc **+ SELL** tại đúng dòng D1 cần quan sát. Khung mặc định là `4H` và có thể đổi sang `8H` trước khi thêm.
 
 - D1 BUY chỉ tìm tín hiệu BUY trên khung nhỏ.
 - D1 SELL chỉ tìm tín hiệu SELL trên khung nhỏ.
 - Ưu tiên đúng sàn đã được chọn ở D1; nếu timeout, `429`, `5xx` hoặc lỗi mạng thì thử lại hai lần trước khi chuyển sang sàn dự phòng.
 - Mỗi coin chỉ có một mục theo dõi; thêm lại sẽ cập nhật chiều, khung và bắt đầu lại 7 ngày.
 - Hết 7 ngày mục tự ngừng quét; có thể gia hạn hoặc xóa thủ công.
-- Scheduler quét vào phút thứ 5 mỗi giờ theo mặc định và chỉ gửi khi nến đã đóng có tín hiệu đúng chiều.
+- Scheduler mặc định quét lúc `03:05 · 07:05 · 11:05 · 15:05 · 19:05 · 23:05` theo giờ Việt Nam và chỉ gửi khi nến đã đóng có tín hiệu đúng chiều.
 
-Danh sách nằm tại `DATA_DIR/focus-watchlist.json`, tách khỏi source và không bị ảnh hưởng khi cập nhật bằng Git.
+Danh sách nằm tại `DATA_DIR/focus-watchlist.json`, tách khỏi source và không bị ảnh hưởng khi cập nhật bằng Git. Các mục `timeframes`, `defaultTimeframe`, `retentionDays` và `scanHours` nằm trong vùng `focus` của `config.json`; thay đổi file này cần restart tiến trình.
 
 ## DEX Crypto
 
@@ -150,6 +150,39 @@ Cấu hình giao diện và lịch sử chống gửi trùng nằm trong `DATA_D
 Scheduler chạy bên trong tiến trình Node.js, vì vậy `npm start` phải luôn hoạt động. Giai đoạn triển khai máy chủ sẽ cấu hình PM2 để tự khởi động lại sau reboot.
 
 Chi tiết vận hành nằm trong `NEXT_PHASE.md`.
+
+## Coin mới và khung 8H
+
+Tab **Coin mới** dùng watchlist riêng, không trộn với danh sách theo dõi điểm vào 7 ngày. Khi thêm, chỉ cần nhập mã coin (`HYPE`) hoặc cặp Spot (`HYPEUSDT`); server tự kiểm tra `Binance → OKX → Bybit`, chọn thị trường Spot đầu tiên đang giao dịch rồi ghim cố định định danh `sàn:cặp`. Coin không tự hết hạn và chỉ bị xóa khi người dùng chủ động xóa.
+
+Mỗi dòng có thể mở trực tiếp chart 8H, sau đó chuyển sang 1H hoặc 4H để xem điểm vào. Trạng thái tạm dừng được lưu bền vững. Dữ liệu nằm trong `DATA_DIR/new-coin-watchlist.json`.
+
+Chart 8H hiển thị cả nến đang chạy như chart D1. Trong 4 giờ đầu, nến tạm được dựng từ nến 4H hiện tại; trong 4 giờ sau, hệ thống ghép nến 4H đầu tiên đã đóng với nến 4H thứ hai đang chạy. Nến tạm chỉ dùng để hiển thị và EMA trực quan; Signal, SMC xác nhận và scheduler Telegram vẫn chỉ dùng nến đã đóng.
+
+Candidate v3.0.1 quét các coin đang hoạt động tại `07:05 · 15:05 · 23:05` theo giờ Việt Nam, sau khi nến 8H đóng. Coin tạm dừng không gọi API sàn. Nút **Quét 8H & gửi Telegram** cho phép chạy thử ngay; chạy thủ công không làm thay đổi lịch sử chống gửi trùng của scheduler. Có thể đổi khung/lịch trong `config.json`:
+
+```json
+"newCoins": {
+  "timeframe": "8H",
+  "exchangePriority": ["BINANCE", "OKX", "BYBIT"],
+  "scanHours": [7, 15, 23],
+  "scanMinute": 5,
+  "minimumCandles": 61
+}
+```
+
+Các thông số thời gian cố định không chỉnh trên UI cũng nằm trong `config.json`:
+
+```json
+"automation": {
+  "timezone": "Asia/Ho_Chi_Minh",
+  "schedulerPollSeconds": 30
+}
+```
+
+Giờ D1/W1 và phút quét danh sách theo dõi 4H/8H vẫn được chỉnh trực tiếp trên UI và lưu trong `DATA_DIR/automation.json`. Sau khi sửa `config.json`, cần restart PM2.
+
+`minimumCandles: 61` tương ứng khoảng 20 ngày dữ liệu 8H và là ngưỡng tối thiểu để EMA55 cùng các điều kiện Pine hiện tại bắt đầu hợp lệ. Coin mới hơn ngưỡng này được giữ trong watchlist nhưng lượt quét sẽ báo `Thiếu dữ liệu`; chi tiết vẫn chỉ nằm trong log.
 
 ## GitHub và Linux
 
