@@ -18,7 +18,7 @@
 
     <section class="tab-panel active" id="panel-cex">
       <section class="controls">
-        <div class="watchlist-import"><div><strong>Watchlist CEX</strong><small>Mỗi coin một lần: Binance → OKX → Bybit → Bitget → KuCoin → Gate.io → MEXC.</small></div><label class="file-button" for="watchlistFile">Nhập file .txt</label><input id="watchlistFile" type="file" accept=".txt,text/plain"></div>
+        <div class="watchlist-import"><div><strong>Watchlist CEX</strong><small>Mỗi coin một lần: Binance → OKX → Bybit → Bitget → KuCoin → Gate.io → MEXC.</small></div><label class="file-button" for="watchlistFile">Nhập file .txt</label><input id="watchlistFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
         <p id="fileState" class="file-state"></p>
         <label for="symbols">Danh sách coin <small>cách nhau bằng dấu phẩy hoặc xuống dòng</small></label>
         <textarea id="symbols" rows="3" spellcheck="false"></textarea>
@@ -52,15 +52,25 @@
 
     <section class="tab-panel" id="panel-dex">
       <section class="controls">
-        <div class="watchlist-import"><div><strong>Token DEX</strong><small>Bắt buộc blockchain và token_address để tránh nhầm token giả.</small></div><label class="file-button" for="dexFile">Nhập file .txt</label><input id="dexFile" type="file" accept=".txt,text/plain"></div>
+        <div class="watchlist-import"><div><strong>Token DEX · 1H đến D1</strong><small>Chọn chain, dán địa chỉ hợp đồng rồi xem thông tin pool trước khi thêm.</small></div><label class="file-button" for="dexFile">Nhập file .txt</label><input id="dexFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
         <p id="dexFileState" class="file-state"></p>
-        <label for="dexTokens">Danh sách token address <small>mỗi dòng: chain:token_address</small></label>
-        <textarea id="dexTokens" rows="5" spellcheck="false" placeholder="solana:ĐỊA_CHỈ_TOKEN&#10;base:0xĐỊA_CHỈ_TOKEN&#10;bsc:0xĐỊA_CHỈ_TOKEN"></textarea>
-        <div class="actions"><select id="dexTimeframe" aria-label="Khung thời gian"><option value="1D">D1</option><option value="1W" id="dexWeeklyOption">W1</option></select><button id="scanDex">Quét DEX</button><span id="dexState">GeckoTerminal giới hạn tốc độ; quá trình có thể chậm.</span></div>
+        <div class="dex-token-builder">
+          <label>Chain<select id="dexNetwork" aria-label="Blockchain"></select></label>
+          <label>Địa chỉ hợp đồng<input id="dexTokenAddress" type="text" spellcheck="false" autocomplete="off" placeholder="Dán token contract address"></label>
+          <button id="findDexPools" type="button" class="secondary">Tìm pool</button>
+        </div>
+        <div id="dexPoolPicker" class="dex-pool-picker hidden">
+          <label>Chọn pool <small>Hiển thị cặp, DEX, thanh khoản và volume 24h</small><select id="dexPoolSelect"></select></label>
+          <button id="addDexToken" type="button">+ Thêm token / pool</button>
+        </div>
+        <p id="dexPoolState" class="file-state">Ngưỡng gợi ý mặc định: 10.000 USD. Pool dưới ngưỡng vẫn có thể chọn thủ công.</p>
+        <label for="dexTokens">Danh sách đã chọn <small>có thể sửa trực tiếp hoặc nhập file chain:token_address:pool_address</small></label>
+        <textarea id="dexTokens" rows="5" spellcheck="false" placeholder="Pool đã chọn sẽ được thêm tại đây"></textarea>
+        <div class="actions"><select id="dexTimeframe" aria-label="Khung thời gian"></select><button id="scanDex">Quét DEX</button><span id="dexState">GeckoTerminal giới hạn tốc độ; quá trình có thể chậm.</span></div>
       </section>
       <section class="summary" id="dexSummary"></section>
       <section class="table-wrap"><table><thead><tr><th>Token</th><th>Chain / DEX</th><th>Khung</th><th>Tín hiệu</th><th>Loại</th><th>Pool / Thanh khoản</th><th>Nến</th></tr></thead><tbody id="dexResults"></tbody></table></section>
-      <p class="note">Tool tự chọn pool có thanh khoản cao nhất đạt ngưỡng 100.000 USD. Luôn kiểm tra lại contract và pool trước khi giao dịch.</p>
+      <p class="note">Mỗi lượt tối đa <span id="dexMaxTokens">10</span> token. DEX hỗ trợ mọi quote token mà nguồn dữ liệu trả về. Mỗi token dùng đúng pool bạn chọn; không nối nến từ nhiều pool.</p>
     </section>
 
     <section class="tab-panel" id="panel-stocks">
@@ -92,9 +102,15 @@
             <label class="check-row"><input id="automationEnabled" type="checkbox"> Bật chạy tự động</label>
             <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><div class="schedule-fields"><input id="dailyTime" type="time"></div><span class="schedule-note">mỗi ngày</span></div>
             <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><div class="schedule-fields weekly-fields"><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div><span class="schedule-note">mỗi tuần</span></div>
-            <div class="schedule-row"><label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> <span class="focus-timeframes-label">4H/8H</span></label><div class="schedule-fields minute-fields"><input id="focusMinute" type="number" min="0" max="59"><span>phút</span></div><span class="schedule-note">sau giờ đóng nến</span></div>
-            <div class="schedule-row"><label class="check-row"><input id="newCoinScheduleEnabled" type="checkbox"> Coin mới 8H</label><div class="schedule-fields"><strong id="newCoinScheduleTimes">07:05 · 15:05 · 23:05</strong></div><span class="schedule-note">giờ Việt Nam</span></div>
-            <small>Múi giờ từ config: <span id="automationTimezone">Asia/Ho_Chi_Minh</span>. Mặc định 07:10, sau lúc nến UTC đóng.</small>
+            <div class="schedule-row"><strong>Khung nhỏ</strong><div class="schedule-fields minute-fields"><input id="closedCandleMinute" type="number" min="0" max="59"><span>phút</span></div><span class="schedule-note">sau giờ đóng nến</span></div>
+            <div class="schedule-groups">
+              <label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> Theo dõi <span class="focus-timeframes-label">4H/8H</span></label>
+              <label class="check-row"><input id="newCoinScheduleEnabled" type="checkbox"> Coin mới 8H</label>
+              <label class="check-row"><input id="dex4hScheduleEnabled" type="checkbox"> DEX 4H</label>
+              <label class="check-row"><input id="dex8hScheduleEnabled" type="checkbox"> DEX 8H</label>
+            </div>
+            <small id="closedCandleSchedulePreview"></small>
+            <small>Múi giờ: <span id="automationTimezone">Asia/Ho_Chi_Minh</span>. Tất cả lịch khung nhỏ dùng chung số phút sau khi nến đóng.</small>
           </fieldset>
         </div>
 
@@ -106,16 +122,16 @@
               <textarea id="autoCexSymbols" rows="5" spellcheck="false" placeholder="BTC, ETH, SOL, MNT, PI"></textarea>
             </div>
             <div>
-              <div class="watchlist-import compact"><div><label class="check-row"><input id="autoDexEnabled" type="checkbox"> <strong>DEX</strong></label><small>Bắt buộc chain:token_address</small></div><label class="file-button" for="autoDexFile">Nạp .txt</label><input id="autoDexFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
-              <textarea id="autoDexTokens" rows="5" spellcheck="false" placeholder="base:0x…&#10;solana:…"></textarea>
+              <div class="watchlist-import compact"><div><label class="check-row"><input id="autoDexEnabled" type="checkbox"> <strong>DEX</strong></label><small>Cảnh báo 4H/8H bắt buộc chain:token_address:pool_address</small></div><label class="file-button" for="autoDexFile">Nạp .txt</label><input id="autoDexFile" class="hidden-file" type="file" accept=".txt,text/plain"></div>
+              <textarea id="autoDexTokens" rows="5" spellcheck="false" placeholder="base:0x…:0xpool…&#10;solana:token…:pool…"></textarea>
             </div>
           </div>
           <div class="future-asset"><strong>STOCK · SSI</strong><span>Đã có schema watchlist và lịch riêng; adapter dữ liệu chưa bật.</span></div>
           <p id="autoFileState" class="file-state"></p>
         </fieldset>
 
-        <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi tóm tắt khi không có tín hiệu mới</label><small>Chi tiết lỗi chỉ ghi log; Telegram chỉ hiển thị tổng số lỗi.</small></div>
-        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
+        <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi thống kê lượt quét khi không có tín hiệu mới</label><small>Các nhóm trùng thời điểm được gộp trong một bản tin; chi tiết lỗi chỉ ghi log.</small></div>
+        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runDex4hNow">Chạy DEX 4H</button><button class="secondary" id="runDex8hNow">Chạy DEX 8H</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
         <div id="lastRuns" class="last-runs"></div>
       </section>
     </section>

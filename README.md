@@ -1,6 +1,6 @@
 # Trading Signal
 
-Phiên bản chính thức: **3.0.1**. Bản này bổ sung scheduler và Telegram cho Coin mới 8H, hoàn tất thao tác chạy tay trong phần Tự động và kiểm thử dispatch scheduler thực tế. Biểu đồ nến Nhật, EMA, Signal và SMC tiếp tục dùng chung engine hiện có trên `1H`, `4H`, `8H`, `D1`, `W1`; không thay đổi các cấu hình production về port, PM2, Nginx hoặc `.env.example`.
+Phiên bản phát hành: **3.1.0**, phát triển từ bản production **3.0.1**. Bản này hoàn thiện DEX `1H · 4H · 8H · D1`, chọn và ghim pool trực quan, cache/retry cho nguồn dữ liệu chập chờn, quét từng token bằng request riêng, workspace DEX trên chart và cảnh báo Telegram cho DEX `4H/8H`.
 
 Ứng dụng quét tín hiệu đa tài sản trên dữ liệu nến đã đóng. Hiện tại CEX Crypto và DEX Crypto hoạt động; kiến trúc đã dành sẵn provider, watchlist và lịch riêng cho chứng khoán Việt Nam.
 
@@ -98,30 +98,49 @@ Danh sách nằm tại `DATA_DIR/focus-watchlist.json`, tách khỏi source và 
 
 ## DEX Crypto
 
-DEX không tìm theo ticker. Mỗi dòng bắt buộc có blockchain và `token_address`:
+DEX không tìm theo ticker. Mỗi dòng bắt buộc có blockchain và `token_address`; có thể thêm `pool_address` ở cuối để ghim nguồn nến:
 
 ```text
 solana:ĐỊA_CHỈ_TOKEN
 base:0xĐỊA_CHỈ_TOKEN
-bsc:0xĐỊA_CHỈ_TOKEN
+bsc:0xĐỊA_CHỈ_TOKEN:0xĐỊA_CHỈ_POOL
 ```
 
 Các network mặc định: `solana`, `eth`, `base`, `bsc`, `arbitrum`, `polygon_pos`, `avax`, `optimism`.
 
 Có thể dùng `sample-dex-watchlist.txt` đi kèm để kiểm tra tab DEX.
 
-Tool dùng GeckoTerminal để lấy tối đa ba trang pool, chỉ giữ pool có thanh khoản tối thiểu 100.000 USD, ưu tiên pool USDT rồi fallback USDC, sau đó chọn pool thanh khoản lớn nhất trong loại quote được ưu tiên. Pool ghép token khác bị loại.
+Candidate hỗ trợ `1H · 4H · 8H · D1`. Khung 8H được ghép từ hai nến 4H của cùng một pool. Trên UI, chọn chain, dán contract address, xem danh sách pool gồm cặp/DEX/thanh khoản/volume 24h rồi chủ động ghim pool. Tool hỗ trợ mọi quote token nguồn dữ liệu trả về, không giới hạn USDT/USDC. Dữ liệu cũ chưa ghim pool vẫn tự chọn pool có thanh khoản cao nhất từ ngưỡng cấu hình; không tự nối hay đổi nguồn nến giữa các pool.
 
-- D1: dùng GeckoTerminal keyless, không cần API key.
-- W1: tổng hợp từ tối thiểu 700 nến ngày và cần CoinGecko Onchain **Analyst** API key để lấy lịch sử sâu.
+- Scanner thủ công DEX khung nhỏ dùng GeckoTerminal keyless, không cần API key.
+- Chart DEX dùng chung EMA, Signal và SMC; nến đang chạy chỉ hiển thị, không xác nhận tín hiệu.
+- Automation có lịch DEX `4H/8H` riêng và nút chạy tay cho từng khung. Cảnh báo khung nhỏ bắt buộc mỗi token có pool address đã ghim; Signal chỉ dùng nến đã đóng.
+- Mặc định lịch DEX `4H/8H` tắt sau khi nâng cấp. Kiểm thử nút chạy tay trước, sau đó bật từng lịch trên UI.
 
-Cấu hình W1 trong file `.env`:
+Nếu vẫn dùng DEX W1 trong Automation cũ, cấu hình Analyst key trong `.env`:
 
 ```dotenv
 COINGECKO_API_KEY=YOUR_KEY
 ```
 
 Không ghi API key vào `config.json` hoặc commit lên Git.
+
+Các giới hạn DEX nằm trong `config.json`; thay đổi cần restart PM2:
+
+```json
+"dex": {
+  "timeframes": ["1H", "4H", "8H", "1D"],
+  "defaultTimeframe": "4H",
+  "maxTokensPerScan": 10,
+  "minimumCandles": 100,
+  "chartCandles": 500,
+  "scanConcurrency": 1,
+  "minimumLiquidityUsd": 10000,
+  "poolSwitchLiquidityRatio": 1.5,
+  "poolPages": 1,
+  "requestIntervalMs": 6500
+}
+```
 
 ## VN Stocks
 
@@ -141,9 +160,9 @@ Engine SMC nằm riêng tại `public/smc.js` và chỉ nhận mảng OHLC chu�
 2. Trên Telegram, mở bot và gửi `/start`. Nếu gửi vào nhóm, thêm bot vào nhóm rồi gửi một tin nhắn trong nhóm.
 3. Mở tab **Tự động & Telegram**, bấm **Tìm Chat ID**, chọn đúng chat rồi bấm **Gửi tin thử**.
 4. Nạp watchlist CEX và/hoặc DEX. Nội dung được lưu trên chính máy chạy tool, có thể sửa và bấm **Lưu cấu hình** lại bất cứ lúc nào.
-5. Chọn D1/W1, giờ chạy và bật **Chạy tự động**. Mặc định D1 là 07:10 giờ Việt Nam; W1 nên đặt sáng thứ Hai sau khi tuần UTC đóng.
+5. Chọn D1/W1, cấu hình một lần số phút chờ sau khi nến đóng cho các nhóm khung nhỏ rồi bật **Chạy tự động**. Mặc định D1 là 07:10 giờ Việt Nam; W1 nên đặt sáng thứ Hai sau khi tuần UTC đóng.
 
-Khi chạy theo lịch, tool chỉ gửi các tín hiệu BUY/SELL/BOTH mới và lưu khóa nến đã gửi để tránh gửi trùng. Hai nút **Chạy D1 ngay** và **Chạy W1 ngay** luôn gửi đầy đủ danh sách tín hiệu hiện tại để kiểm tra thủ công; các lần chạy thủ công không làm thay đổi lịch sử chống trùng của lịch tự động. Có thể bật/tắt bản tóm tắt không có tín hiệu và lỗi dữ liệu.
+Khi chạy theo lịch, tool chỉ gửi các tín hiệu BUY/SELL/BOTH mới và lưu khóa nến đã gửi để tránh gửi trùng. Coin mới 8H, Theo dõi 4H/8H và DEX 4H/8H dùng chung số phút chờ sau giờ đóng nến. Các nhóm đến hạn tại cùng một mốc được gộp thành một bản tin Telegram; nếu không có tín hiệu, bản tin chỉ giữ thống kê lượt quét, không thêm câu thông báo “không có tín hiệu”. Hai nút **Chạy D1 ngay** và **Chạy W1 ngay** luôn gửi đầy đủ danh sách tín hiệu hiện tại để kiểm tra thủ công; các lần chạy thủ công không làm thay đổi lịch sử chống trùng của lịch tự động.
 
 Cấu hình giao diện và lịch sử chống gửi trùng nằm trong `DATA_DIR`. Cấu hình schema v2 tách `assets.cex`, `assets.dex`, `assets.stocks` và lịch riêng cho crypto/stock. Stock đang tắt cho đến khi adapter SSI được hoàn thiện. Dữ liệu cấu hình v1 được tự chuyển đổi khi đọc.
 

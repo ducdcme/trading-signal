@@ -4,6 +4,8 @@ import { localClock, normalizeAutomation } from "../lib/automation-store.js";
 import { splitTelegramText } from "../lib/telegram.js";
 import { selectDeliverySignals, signalKey } from "../lib/automation-signals.js";
 import { groupDirectionalSignals, signalDisplayName } from "../lib/signal-groups.js";
+import { formatAutomationReport, formatScheduledBatchReport } from "../lib/automation-report.js";
+import { assertPinnedDexAlertTokens } from "../lib/dex-alerts.js";
 
 test("migrates version 1 automation settings to the multi-asset schema", () => {
   const settings = normalizeAutomation({
@@ -14,15 +16,18 @@ test("migrates version 1 automation settings to the multi-asset schema", () => {
     cexSymbols: ["BTC", "BTC", "ETH"],
     dexTokens: [{ network: "BASE", tokenAddress: "0xabc" }]
   });
-  assert.equal(settings.schemaVersion, 4);
+  assert.equal(settings.schemaVersion, 6);
   assert.equal(settings.telegram.chatId, "-100123");
   assert.deepEqual(settings.assets.cex.watchlist, ["BTC", "ETH"]);
   assert.equal(settings.assets.dex.watchlist[0].network, "base");
   assert.equal(settings.schedules.cryptoWeekly.day, 1);
   assert.equal(settings.assets.stocks.enabled, false);
   assert.deepEqual(settings.assets.stocks.watchlist, []);
-  assert.deepEqual(settings.schedules.focusScan, { enabled: true, minute: 5 });
+  assert.deepEqual(settings.schedules.closedCandle, { minute: 5 });
+  assert.deepEqual(settings.schedules.focusScan, { enabled: true });
   assert.deepEqual(settings.schedules.newCoinScan, { enabled: true });
+  assert.deepEqual(settings.schedules.dex4h, { enabled: false });
+  assert.deepEqual(settings.schedules.dex8h, { enabled: false });
 });
 
 test("keeps stock placeholders and independent schedules in version 2", () => {
@@ -34,6 +39,20 @@ test("keeps stock placeholders and independent schedules in version 2", () => {
   assert.deepEqual(settings.assets.stocks.watchlist, ["FPT", "HOSE:HPG"]);
   assert.deepEqual(settings.schedules.stockDaily, { enabled: false, time: "15:30" });
   assert.deepEqual(settings.schedules.stockWeekly, { enabled: false, day: 5, time: "15:35" });
+});
+
+test("preserves a pinned DEX pool in automation settings", () => {
+  const settings = normalizeAutomation({
+    schemaVersion: 4,
+    assets: { dex: { enabled: true, watchlist: [{ network: "SOLANA", tokenAddress: "token-address", poolAddress: "pool-address" }] } }
+  });
+  assert.deepEqual(settings.assets.dex.watchlist, [{ network: "solana", tokenAddress: "token-address", poolAddress: "pool-address" }]);
+});
+
+test("preserves independent DEX 4H and 8H alert switches", () => {
+  const settings = normalizeAutomation({ schedules: { dex4h: { enabled: true }, dex8h: { enabled: false } } });
+  assert.deepEqual(settings.schedules.dex4h, { enabled: true });
+  assert.deepEqual(settings.schedules.dex8h, { enabled: false });
 });
 
 test("calculates scheduler clock in Viet Nam timezone", () => {
@@ -63,6 +82,46 @@ test("scheduled runs still suppress signals already delivered automatically", ()
   assert.deepEqual(result.delivered, [audi]);
   assert.equal(result.suppressed, 1);
   assert.equal(result.sentKeys.length, 2);
+});
+
+test("DEX signal deduplication includes the pinned pool address", () => {
+  const base = { assetType: "DEX", exchange: "GECKOTERMINAL", instrumentId: "TOKEN", network: "base", tokenAddress: "0xtoken", candleOpenTime: 1, status: "BUY", buySignalTypes: ["B"] };
+  assert.notEqual(signalKey({ ...base, poolAddress: "0xpool1" }, "4H"), signalKey({ ...base, poolAddress: "0xpool2" }, "4H"));
+});
+
+test("DEX Telegram report identifies timeframe, contract and pinned pool without exposing error details", () => {
+  const row = {
+    assetType: "DEX", exchange: "GECKOTERMINAL", instrumentId: "TOKEN", network: "base", dex: "aerodrome",
+    tokenAddress: "0xtoken", poolAddress: "0xpool", poolName: "TOKEN / WETH", close: 1.25,
+    status: "BUY", buySignalTypes: ["B"]
+  };
+  const error = { assetType: "DEX", status: "ERROR", error: "fetch failed: private upstream detail" };
+  const report = formatAutomationReport("4H", [row, error], { delivered: [row], suppressed: 0 }, { timezone: "Asia/Ho_Chi_Minh", telegram: { sendNoSignalSummary: true } }, "schedule", "DEX");
+  assert.match(report, /Trading Signal · DEX · 4H/);
+  assert.match(report, /Contract: 0xtoken/);
+  assert.match(report, /Pool: TOKEN \/ WETH/);
+  assert.match(report, /Loại lỗi: Lỗi mạng: 1/);
+  assert.doesNotMatch(report, /private upstream detail/);
+});
+
+test("scheduled summaries omit the no-signal sentence and can be combined into one Telegram report", () => {
+  const settings = { timezone: "Asia/Ho_Chi_Minh", telegram: { sendNoSignalSummary: true } };
+  const dex = formatAutomationReport("8H", [{ assetType: "DEX", status: "NONE" }], { delivered: [], suppressed: 0 }, settings, "schedule", "DEX");
+  const coin = formatAutomationReport("4H", [{ exchange: "BINANCE", status: "NONE" }], { delivered: [], suppressed: 0 }, settings, "schedule", "CEX");
+  assert.doesNotMatch(dex, /Không có tín hiệu/);
+  const combined = formatScheduledBatchReport([dex, coin], settings, new Date("2026-08-08T00:05:00Z"));
+  assert.equal((combined.match(/Báo cáo tự động/g) || []).length, 1);
+  assert.match(combined, /Trading Signal · DEX · 8H/);
+  assert.match(combined, /Trading Signal · CEX · 4H/);
+  assert.equal((combined.match(/Thời điểm:/g) || []).length, 1);
+  assert.equal((combined.match(/Chế độ:/g) || []).length, 0);
+  assert.equal((combined.match(/Đã quét:/g) || []).length, 2);
+});
+
+test("DEX small-timeframe alerts require every token to have a pinned pool", () => {
+  const pinned = [{ network: "base", tokenAddress: "0xtoken", poolAddress: "0xpool" }];
+  assert.deepEqual(assertPinnedDexAlertTokens(pinned), pinned);
+  assert.throws(() => assertPinnedDexAlertTokens([{ network: "base", tokenAddress: "0xtoken" }]), /yêu cầu ghim pool/);
 });
 
 test("focus fallback keeps the original market identity for deduplication", () => {

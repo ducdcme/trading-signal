@@ -1,5 +1,6 @@
 import { parseSymbols } from "./symbols.js";
 import { initialAppTab, normalizeAppTab, shouldRestoreScanCache } from "./navigation-state.js";
+import { scanDexTokensSequentially } from "./dex-scan.js";
 
 const $ = selector => document.querySelector(selector);
 const h = value => String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -8,6 +9,7 @@ const price = value => Number.isFinite(value) ? value.toLocaleString("en-US", { 
 const shortAddress = value => value?.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 const signalTypes = row => [...(row.buyTypes ?? []), ...(row.sellTypes ?? []), ...(row.warnings ?? []), ...(row.exitTypes ?? []), ...(row.trendTypes ?? [])];
 const chartUrl = (exchange, symbol, timeframe = "1D", returnTab = "cex") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab: normalizeAppTab(returnTab) })}`;
+const dexChartUrl = row => `/chart.html?${new URLSearchParams({ mode: "DEX", network: row.network, tokenAddress: row.tokenAddress, poolAddress: row.poolAddress, symbol: row.instrumentId, timeframe: row.timeframe, returnTab: "dex" })}`;
 const scanCacheKeys = { cex: "trading-signal:cex-scan:v1", dex: "trading-signal:dex-scan:v1" };
 const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
 const activeTabKey = "trading-signal:active-tab:v1";
@@ -68,16 +70,25 @@ const config = await fetch("/api/config").then(response => response.json());
 $("#symbols").value = config.symbols.join(", ");
 const focusTimeframes = config.focus?.timeframes?.length ? config.focus.timeframes : ["4H", "8H"];
 const newCoinTimeframe = config.newCoins?.timeframe || "8H";
-const newCoinScanTimes = (config.newCoins?.scanHours || [7, 15, 23]).map(hour => `${String(hour).padStart(2, "0")}:${String(config.newCoins?.scanMinute ?? 5).padStart(2, "0")}`);
+const dexTimeframes = config.dex?.timeframes?.length ? config.dex.timeframes : ["1H", "4H", "8H", "1D"];
+const dexNetworks = config.dex?.networks?.length ? config.dex.networks : ["solana", "eth", "base", "bsc"];
+const dexNetworkLabels = config.dex?.networkLabels || {};
+const formatClosedCandleTimes = (hours, minute) => hours.map(hour => `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`).join(" · ");
+function updateClosedCandleSchedulePreview() {
+  const value = Number($("#closedCandleMinute").value);
+  const minute = Number.isInteger(value) && value >= 0 && value <= 59 ? value : 5;
+  const fourHour = config.focus?.scanHours || [3, 7, 11, 15, 19, 23];
+  const eightHour = config.newCoins?.scanHours || [7, 15, 23];
+  $("#closedCandleSchedulePreview").textContent = `4H: ${formatClosedCandleTimes(fourHour, minute)} · 8H: ${formatClosedCandleTimes(eightHour, minute)} (giờ Việt Nam)`;
+}
 $("#focusDefaultTimeframe").innerHTML = focusTimeframes.map(value => `<option value="${h(value)}">${h(value)}</option>`).join("");
 $("#focusDefaultTimeframe").value = focusTimeframes.includes(config.focus?.defaultTimeframe) ? config.focus.defaultTimeframe : focusTimeframes[0];
 document.querySelectorAll(".focus-timeframes-label").forEach(element => { element.textContent = focusTimeframes.join("/"); });
-$("#newCoinScheduleTimes").textContent = newCoinScanTimes.join(" · ");
 $("#automationTimezone").textContent = config.automation?.timezone || "Asia/Ho_Chi_Minh";
-if (!config.capabilities?.dexWeekly) {
-  $("#dexWeeklyOption").disabled = true;
-  $("#dexWeeklyOption").textContent = "W1 · cần CoinGecko Analyst key";
-}
+$("#dexTimeframe").innerHTML = dexTimeframes.map(value => `<option value="${h(value)}">${h(value)}</option>`).join("");
+$("#dexTimeframe").value = dexTimeframes.includes(config.dex?.defaultTimeframe) ? config.dex.defaultTimeframe : dexTimeframes[0];
+$("#dexNetwork").innerHTML = dexNetworks.map(value => `<option value="${h(value)}">${h(dexNetworkLabels[value] || value)}</option>`).join("");
+$("#dexMaxTokens").textContent = String(config.dex?.maxTokensPerScan || 10);
 
 let automationSnapshot = await fetch("/api/automation").then(response => response.json());
 
@@ -103,7 +114,7 @@ $("#watchlistFile").addEventListener("change", () => importTextFile($("#watchlis
 $("#dexFile").addEventListener("change", () => importTextFile($("#dexFile"), $("#dexFileState"), (text, name) => {
   const imported = parseDexTokens(text);
   if (!imported.length) throw new Error("Không tìm thấy chain:token_address hợp lệ");
-  $("#dexTokens").value = imported.map(item => `${item.network}:${item.tokenAddress}`).join("\n");
+  $("#dexTokens").value = imported.map(item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`).join("\n");
   $("#dexFileState").textContent = `Đã nhập ${imported.length} token address từ ${name}.`;
 }));
 
@@ -112,15 +123,68 @@ function parseDexTokens(text) {
   for (const raw of text.split(/[\r\n,;]+/)) {
     const line = raw.trim();
     if (!line || line.startsWith("###")) continue;
-    const separator = line.indexOf(":");
-    if (separator < 1) throw new Error(`Thiếu blockchain trong dòng: ${line}`);
-    const network = line.slice(0, separator).trim().toLowerCase();
-    const tokenAddress = line.slice(separator + 1).trim();
+    const [networkRaw, tokenRaw, poolRaw = ""] = line.split(":");
+    const network = String(networkRaw || "").trim().toLowerCase();
+    const tokenAddress = String(tokenRaw || "").trim();
+    const poolAddress = String(poolRaw || "").trim();
     if (!network || !tokenAddress) throw new Error(`Dòng không hợp lệ: ${line}`);
-    found.set(`${network}:${tokenAddress}`, { network, tokenAddress });
+    found.set(`${network}:${tokenAddress}`, { network, tokenAddress, ...(poolAddress ? { poolAddress } : {}) });
   }
   return [...found.values()];
 }
+
+const dexTokenLine = item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`;
+let discoveredDexPools = [];
+
+function selectedDexPoolText(pool) {
+  const liquidity = Number(pool.liquidityUsd || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const volume = Number(pool.volume24hUsd || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const minimum = Number(config.dex?.minimumLiquidityUsd || 10_000).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const warning = pool.meetsMinimumLiquidity ? "" : ` · dưới ngưỡng $${minimum}`;
+  return `${pool.poolName || pool.quoteSymbol} · ${pool.dex} · TVL $${liquidity} · Vol24h $${volume}${warning}`;
+}
+
+function updateDexPoolState() {
+  const pool = discoveredDexPools.find(item => item.poolAddress === $("#dexPoolSelect").value);
+  if (!pool) return;
+  $("#dexPoolState").textContent = `${selectedDexPoolText(pool)} · ${shortAddress(pool.poolAddress)}`;
+}
+
+$("#findDexPools").addEventListener("click", async () => {
+  const button = $("#findDexPools");
+  const network = $("#dexNetwork").value;
+  const tokenAddress = $("#dexTokenAddress").value.trim();
+  button.disabled = true;
+  $("#dexPoolPicker").classList.add("hidden");
+  $("#dexPoolState").textContent = "Đang lấy danh sách pool…";
+  try {
+    const response = await fetch(`/api/dex/pools?${new URLSearchParams({ network, tokenAddress })}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    discoveredDexPools = data.pools || [];
+    if (!discoveredDexPools.length) throw new Error("Không tìm thấy pool nào cho contract này trên chain đã chọn");
+    $("#dexPoolSelect").innerHTML = discoveredDexPools.map(pool => `<option value="${h(pool.poolAddress)}">${h(selectedDexPoolText(pool))}</option>`).join("");
+    $("#dexPoolPicker").classList.remove("hidden");
+    updateDexPoolState();
+  } catch (error) {
+    discoveredDexPools = [];
+    $("#dexPoolState").textContent = `Lỗi: ${error.message}`;
+  } finally { button.disabled = false; }
+});
+
+$("#dexPoolSelect").addEventListener("change", updateDexPoolState);
+
+$("#addDexToken").addEventListener("click", () => {
+  const pool = discoveredDexPools.find(item => item.poolAddress === $("#dexPoolSelect").value);
+  if (!pool) return;
+  const item = { network: $("#dexNetwork").value, tokenAddress: $("#dexTokenAddress").value.trim(), poolAddress: pool.poolAddress };
+  const tokens = parseDexTokens($("#dexTokens").value);
+  const index = tokens.findIndex(found => found.network === item.network && found.tokenAddress.toLowerCase() === item.tokenAddress.toLowerCase());
+  if (index >= 0) tokens[index] = item;
+  else tokens.push(item);
+  $("#dexTokens").value = tokens.map(dexTokenLine).join("\n");
+  $("#dexPoolState").textContent = `Đã thêm ${dexNetworkLabels[item.network] || item.network} · ${shortAddress(item.tokenAddress)} · pool ${shortAddress(item.poolAddress)}.`;
+});
 
 function renderSummary(target, rows) {
   const counts = rows.reduce((all, row) => ({ ...all, [row.status]: (all[row.status] ?? 0) + 1 }), {});
@@ -129,6 +193,7 @@ function renderSummary(target, rows) {
 
 const order = { BOTH: 0, BUY: 1, SELL: 2, NONE: 3, SKIPPED: 4, ERROR: 5 };
 let lastCexResults = [];
+let lastDexResults = [];
 
 function renderCexResults(data, restored = false) {
   renderSummary($("#summary"), data.results);
@@ -169,24 +234,49 @@ $("#results").addEventListener("click", async event => {
 
 function renderDexResults(data, restored = false) {
   renderSummary($("#dexSummary"), data.results);
-  $("#dexResults").innerHTML = [...data.results].sort((a, b) => order[a.status] - order[b.status]).map(row => {
+  lastDexResults = [...data.results].sort((a, b) => order[a.status] - order[b.status]);
+  $("#dexResults").innerHTML = lastDexResults.map((row, index) => {
     const types = row.error || signalTypes(row).join(", ") || "—";
-    const pool = row.poolName ? `${row.poolName} · ${row.quoteSymbol} · $${Number(row.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : row.error;
-    return `<tr title="${h(row.tokenAddress)}"><td><strong>${h(row.instrumentId)}</strong><small class="address">${h(shortAddress(row.tokenAddress))}</small></td><td>${h(row.network)}<small>${h(row.dex || "—")}</small></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(types)}</td><td>${h(pool || "—")}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td></tr>`;
+    const warning = row.poolWarnings?.length ? `<small class="pool-warning">${h(row.poolWarnings.join(" · "))}</small>` : "";
+    const pin = row.poolPinned ? "Pool ghim" : "Tự chọn";
+    const pinButton = row.poolAddress ? `<button type="button" class="secondary dex-pin-action" data-dex-pin="${index}"${row.poolPinned ? " disabled" : ""}>${row.poolPinned ? "Đã ghim" : "Ghim pool"}</button>` : "";
+    const pool = row.poolName ? `${h(row.poolName)} · ${h(row.quoteSymbol)} · $${h(Number(row.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 }))}<small title="${h(row.poolAddress)}">${pin} · ${h(shortAddress(row.poolAddress))}</small>${warning}${pinButton}` : h(row.error || "—");
+    const token = row.status === "ERROR" ? `<strong>${h(row.instrumentId)}</strong>` : `<a class="chart-link" href="${h(dexChartUrl(row))}">${h(row.instrumentId)}</a>`;
+    return `<tr title="${h(row.tokenAddress)}"><td>${token}<small class="address">${h(shortAddress(row.tokenAddress))}</small></td><td>${h(row.network)}<small>${h(row.dex || "—")}</small></td><td>${h(row.timeframe || data.timeframe)}</td><td><span class="badge ${h(row.status.toLowerCase())}">${h(row.status)}</span></td><td>${h(types)}</td><td>${pool}</td><td>${row.candleOpenTime ? date(row.candleOpenTime) : "—"}</td></tr>`;
   }).join("");
   $("#dexState").textContent = `${restored ? "Kết quả gần nhất" : "Đã quét"} ${data.results.length} token · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
 }
+
+$("#dexResults").addEventListener("click", event => {
+  const button = event.target.closest("[data-dex-pin]");
+  if (!button) return;
+  const row = lastDexResults[Number(button.dataset.dexPin)];
+  if (!row?.poolAddress) return;
+  const tokens = parseDexTokens($("#dexTokens").value).map(item => item.network === row.network && item.tokenAddress === row.tokenAddress ? { ...item, poolAddress: row.poolAddress } : item);
+  $("#dexTokens").value = tokens.map(item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`).join("\n");
+  button.textContent = "Đã ghim";
+  button.disabled = true;
+  $("#dexState").textContent = `Đã ghim pool ${shortAddress(row.poolAddress)}; bấm Quét DEX để xác nhận lại.`;
+});
 
 $("#scanDex").addEventListener("click", async () => {
   const button = $("#scanDex");
   button.disabled = true; $("#dexState").textContent = "Đang tìm pool và lấy nến; vui lòng chờ…"; $("#dexResults").innerHTML = ""; $("#dexSummary").innerHTML = "";
   try {
     const tokens = parseDexTokens($("#dexTokens").value);
-    const response = await fetch("/api/scan/dex", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tokens, timeframe: $("#dexTimeframe").value }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
+    const timeframe = $("#dexTimeframe").value;
+    const data = await scanDexTokensSequentially(tokens, timeframe, async token => {
+      const response = await fetch("/api/scan/dex", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tokens: [token], timeframe }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      return payload;
+    }, progress => {
+      $("#dexState").textContent = progress.completed < progress.total
+        ? `Đang quét token ${progress.completed + 1}/${progress.total}…`
+        : `Đã tải dữ liệu ${progress.completed}/${progress.total} token…`;
+    });
     renderDexResults(data);
-    saveScanCache("dex", { data, tokens: $("#dexTokens").value, timeframe: $("#dexTimeframe").value });
+    saveScanCache("dex", { data, tokens: $("#dexTokens").value, timeframe });
   } catch (error) { $("#dexState").textContent = `Lỗi: ${error.message}`; }
   finally { button.disabled = false; }
 });
@@ -205,13 +295,13 @@ if (cachedCex?.data?.results?.length) {
 const cachedDex = shouldRestoreScanCache(navigationType) ? readScanCache("dex") : null;
 if (cachedDex?.data?.results?.length) {
   $("#dexTokens").value = cachedDex.tokens || "";
-  $("#dexTimeframe").value = cachedDex.timeframe || cachedDex.data.timeframe || "1D";
+  $("#dexTimeframe").value = dexTimeframes.includes(cachedDex.timeframe || cachedDex.data.timeframe) ? (cachedDex.timeframe || cachedDex.data.timeframe) : (config.dex?.defaultTimeframe || "4H");
   renderDexResults(cachedDex.data, true);
 }
 
 function renderLastRuns(lastRuns = {}) {
-  const rows = ["crypto:1D", "crypto:1W", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
-    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : (run.timeframe || key.slice(7));
+  const rows = ["crypto:1D", "crypto:1W", "dex:4H", "dex:8H", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
+    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : key.startsWith("dex:") ? `DEX ${run.timeframe || key.slice(4)}` : (run.timeframe || key.slice(7));
     const detail = run.status === "ERROR" ? `Lỗi: ${run.error}` : `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
@@ -228,13 +318,16 @@ function fillAutomation(data) {
   $("#weeklyDay").value = String(settings.schedules.cryptoWeekly.day);
   $("#weeklyTime").value = settings.schedules.cryptoWeekly.time;
   $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
-  $("#focusMinute").value = String(settings.schedules.focusScan.minute);
+  $("#closedCandleMinute").value = String(settings.schedules.closedCandle.minute);
+  updateClosedCandleSchedulePreview();
   $("#newCoinScheduleEnabled").checked = settings.schedules.newCoinScan.enabled;
+  $("#dex4hScheduleEnabled").checked = settings.schedules.dex4h.enabled;
+  $("#dex8hScheduleEnabled").checked = settings.schedules.dex8h.enabled;
   $("#sendNoSignalSummary").checked = settings.telegram.sendNoSignalSummary;
   $("#autoCexEnabled").checked = settings.assets.cex.enabled;
   $("#autoDexEnabled").checked = settings.assets.dex.enabled;
   $("#autoCexSymbols").value = (settings.assets.cex.watchlist.length ? settings.assets.cex.watchlist : config.symbols).join(", ");
-  $("#autoDexTokens").value = settings.assets.dex.watchlist.map(item => `${item.network}:${item.tokenAddress}`).join("\n");
+  $("#autoDexTokens").value = settings.assets.dex.watchlist.map(item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`).join("\n");
   const configured = data.capabilities.telegramConfigured;
   $("#telegramStatus").textContent = configured ? "Bot token: đã cấu hình" : "Thiếu TELEGRAM_BOT_TOKEN";
   $("#telegramStatus").className = `status-pill ${configured ? "ok" : "error"}`;
@@ -243,7 +336,7 @@ function fillAutomation(data) {
 
 function collectAutomation() {
   return {
-    schemaVersion: 4,
+    schemaVersion: 6,
     enabled: $("#automationEnabled").checked,
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
@@ -258,8 +351,11 @@ function collectAutomation() {
     schedules: {
       cryptoDaily: { enabled: $("#dailyEnabled").checked, time: $("#dailyTime").value },
       cryptoWeekly: { enabled: $("#weeklyEnabled").checked, day: Number($("#weeklyDay").value), time: $("#weeklyTime").value },
-      focusScan: { enabled: $("#focusScheduleEnabled").checked, minute: Number($("#focusMinute").value) },
+      closedCandle: { minute: Number($("#closedCandleMinute").value) },
+      focusScan: { enabled: $("#focusScheduleEnabled").checked },
       newCoinScan: { enabled: $("#newCoinScheduleEnabled").checked },
+      dex4h: { enabled: $("#dex4hScheduleEnabled").checked },
+      dex8h: { enabled: $("#dex8hScheduleEnabled").checked },
       stockDaily: automationSnapshot.settings.schedules.stockDaily,
       stockWeekly: automationSnapshot.settings.schedules.stockWeekly
     }
@@ -396,7 +492,7 @@ $("#autoCexFile").addEventListener("change", () => importTextFile($("#autoCexFil
 $("#autoDexFile").addEventListener("change", () => importTextFile($("#autoDexFile"), $("#autoFileState"), (text, name) => {
   const tokens = parseDexTokens(text);
   if (!tokens.length) throw new Error("Không tìm thấy token address hợp lệ");
-  $("#autoDexTokens").value = tokens.map(item => `${item.network}:${item.tokenAddress}`).join("\n");
+  $("#autoDexTokens").value = tokens.map(item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`).join("\n");
   $("#autoFileState").textContent = `Đã nạp ${tokens.length} token DEX từ ${name}. Bấm Lưu cấu hình để áp dụng.`;
 }));
 
@@ -443,6 +539,19 @@ async function runNow(timeframe, button) {
 
 $("#runDailyNow").addEventListener("click", event => runNow("1D", event.currentTarget));
 $("#runWeeklyNow").addEventListener("click", event => runNow("1W", event.currentTarget));
+async function runDexNow(timeframe, button) {
+  button.disabled = true; $("#automationState").textContent = `Đang quét DEX ${timeframe} và gửi Telegram…`;
+  try {
+    await saveAutomationSettings(false);
+    const result = await api("/api/automation/dex/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ timeframe }) });
+    $("#automationState").textContent = `DEX ${timeframe}: đã quét ${result.total} token, gửi ${result.sentSignals} tín hiệu.`;
+    automationSnapshot = await api("/api/automation"); renderLastRuns(automationSnapshot.state.lastRuns);
+  } catch (error) { $("#automationState").textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+
+$("#runDex4hNow").addEventListener("click", event => runDexNow("4H", event.currentTarget));
+$("#runDex8hNow").addEventListener("click", event => runDexNow("8H", event.currentTarget));
 $("#runNewCoinsAutomationNow").addEventListener("click", async event => {
   await runNewCoinsNow(event.currentTarget, $("#automationState"));
 });

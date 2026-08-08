@@ -4,12 +4,12 @@ import { activeNewCoinItems, formatNewCoinReport } from "../lib/new-coin-automat
 import { isNewCoinScheduleDue, normalizeNewCoinConfig } from "../lib/new-coin-config.js";
 import { selectDeliverySignals, signalKey } from "../lib/automation-signals.js";
 
-test("normalizes the 8H new-coin schedule from config.json values", () => {
+test("normalizes the 8H new-coin close hours from config.json values", () => {
   assert.deepEqual(normalizeNewCoinConfig({ timeframe: "8h", scanHours: [23, 7, 15, 7, 99], scanMinute: 5 }), {
-    timeframe: "8H", exchangePriority: ["BINANCE", "OKX", "BYBIT"], scanHours: [7, 15, 23], scanMinute: 5, minimumCandles: 61
+    timeframe: "8H", exchangePriority: ["BINANCE", "OKX", "BYBIT"], scanHours: [7, 15, 23], minimumCandles: 61
   });
   assert.deepEqual(normalizeNewCoinConfig({ timeframe: "1H", scanHours: [], scanMinute: 99 }), {
-    timeframe: "8H", exchangePriority: ["BINANCE", "OKX", "BYBIT"], scanHours: [7, 15, 23], scanMinute: 5, minimumCandles: 61
+    timeframe: "8H", exchangePriority: ["BINANCE", "OKX", "BYBIT"], scanHours: [7, 15, 23], minimumCandles: 61
   });
 });
 
@@ -51,5 +51,6 @@ test("new-coin Telegram report exposes error types and counts but not details", 
   const report = formatNewCoinReport(rows, { delivered: [], suppressed: 0, paused: 3 }, { timezone: "Asia/Ho_Chi_Minh", telegram: { sendNoSignalSummary: true } }, "schedule");
   assert.match(report, /Tạm dừng: 3 · Lỗi: 2/);
   assert.match(report, /Loại lỗi: Timeout: 2/);
+  assert.doesNotMatch(report, /Không có tín hiệu/);
   assert.doesNotMatch(report, /secret A|private B|AUSDT|BUSDT/);
 });

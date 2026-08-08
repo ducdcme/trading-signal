@@ -6,7 +6,7 @@ import { parseInstruments } from "./lib/instruments.js";
 import { resolveAndFetchClosedCandles, resolveFocusCandles } from "./lib/market.js";
 import { calculateSignals } from "./lib/indicator.js";
 import { candlesForTimeframe } from "./lib/candles.js";
-import { fetchDexDailyCandles } from "./lib/geckoterminal.js";
+import { discoverDexPoolOptions, fetchDexCandles } from "./lib/geckoterminal.js";
 import { loadEnvFile } from "./lib/env.js";
 import { loadAutomation, loadAutomationState, localClock, normalizeAutomation, saveAutomation, saveAutomationState } from "./lib/automation-store.js";
 import { findTelegramChats, sendTelegramText } from "./lib/telegram.js";
@@ -15,7 +15,7 @@ import { clearSessionCookie, createSessionToken, isSameOrigin, loadAuthConfig, L
 import { deleteFocusEntry, extendFocusEntry, loadFocusList, upsertFocusEntry } from "./lib/focus-store.js";
 import { parseInstrument } from "./lib/instruments.js";
 import { MarketNotFoundError } from "./lib/exchange-errors.js";
-import { groupDirectionalSignals, signalDisplayName } from "./lib/signal-groups.js";
+import { groupDirectionalSignals } from "./lib/signal-groups.js";
 import { ema } from "./lib/ta.js";
 import { fetchMarketQuote } from "./lib/quotes.js";
 import { formatScanErrorSummary } from "./lib/scan-errors.js";
@@ -25,6 +25,8 @@ import { normalizeFocusConfig } from "./lib/focus-config.js";
 import { normalizeNewCoinConfig } from "./lib/new-coin-config.js";
 import { activeNewCoinItems, formatNewCoinReport } from "./lib/new-coin-automation.js";
 import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "./lib/automation-schedule.js";
+import { formatAutomationReport, formatScheduledBatchReport } from "./lib/automation-report.js";
+import { assertPinnedDexAlertTokens } from "./lib/dex-alerts.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -138,14 +140,6 @@ function chartPayload(candles, instrument, timeframe) {
   };
 }
 
-function scanCounts(rows) {
-  return {
-    total: rows.length,
-    skipped: rows.filter(row => row.status === "SKIPPED").length,
-    errors: rows.filter(row => row.status === "ERROR").length
-  };
-}
-
 function logScanErrors(job, rows) {
   for (const row of rows.filter(item => item.status === "ERROR")) {
     console.error(JSON.stringify({ timestamp: new Date().toISOString(), job, asset: row.asset || row.symbol || row.instrumentId, exchange: row.exchange, error: row.error }));
@@ -229,24 +223,27 @@ function parseDexTokens(input) {
   for (const item of Array.isArray(input) ? input : []) {
     const network = String(item.network ?? "").trim().toLowerCase();
     const tokenAddress = String(item.tokenAddress ?? "").trim();
+    const poolAddress = String(item.poolAddress ?? "").trim();
     if (!supported.has(network)) throw new Error(`Mạng chưa được hỗ trợ: ${network}`);
     if (!/^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{25,70})$/.test(tokenAddress)) throw new Error(`Token address không hợp lệ: ${tokenAddress}`);
-    tokens.set(`${network}:${tokenAddress}`, { network, tokenAddress });
+    if (poolAddress && !/^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{25,70})$/.test(poolAddress)) throw new Error(`Pool address không hợp lệ: ${poolAddress}`);
+    tokens.set(`${network}:${tokenAddress}`, { network, tokenAddress, ...(poolAddress ? { poolAddress } : {}) });
   }
   return [...tokens.values()];
 }
 
 async function scanDex(tokens, timeframe) {
-  return mapLimited(tokens, 2, async token => {
+  return mapLimited(tokens, Math.max(1, Number(config.dex.scanConcurrency) || 1), async token => {
     try {
       if (timeframe === "1W" && !process.env.COINGECKO_API_KEY) throw new Error("W1 DEX cần CoinGecko Onchain Analyst API key");
-      const requiredDaily = timeframe === "1W" ? 700 : 100;
-      const market = await fetchDexDailyCandles(token, { ...config.dex, apiKey: process.env.COINGECKO_API_KEY }, requiredDaily);
+      const requiredCandles = Number(config.dex.minimumCandles) || 100;
+      const market = await fetchDexCandles(token, timeframe, { ...config.dex, apiKey: process.env.COINGECKO_API_KEY }, requiredCandles, false);
       return {
         assetType: "DEX", exchange: "GECKOTERMINAL", instrumentId: market.tokenSymbol,
         network: market.network, tokenAddress: market.tokenAddress, poolAddress: market.poolAddress,
         poolName: market.poolName, dex: market.dex, liquidityUsd: market.liquidityUsd, timeframe,
-        quoteSymbol: market.quoteSymbol,
+        quoteSymbol: market.quoteSymbol, poolPinned: market.poolPinned,
+        suggestedPoolAddress: market.suggestedPoolAddress, poolWarnings: market.warnings,
         ...analyzeCandles(market.candles, timeframe)
       };
     } catch (error) {
@@ -263,28 +260,7 @@ function effectiveAutomation(settings) {
   };
 }
 
-function formatAutomationReport(timeframe, rows, delivery, settings, trigger) {
-  const icons = { BUY: "🟢", SELL: "🔴", BOTH: "🟡" };
-  const lines = [`📊 Trading Signal · ${timeframe}`, `Thời điểm: ${new Date().toLocaleString("vi-VN", { timeZone: settings.timezone })}`, `Chế độ: ${trigger === "schedule" ? "Tự động" : "Chạy thủ công"}`, ""];
-  for (const row of delivery.delivered) {
-    const types = [...(row.buySignalTypes || []), ...(row.sellSignalTypes || []), ...(row.warnings || []), ...(row.trendTypes || [])].map(signalDisplayName).join(", ") || row.status;
-    const market = row.assetType === "DEX" ? `${row.network} · ${row.dex || "DEX"}` : row.exchange;
-    lines.push(`${icons[row.status] || "•"} ${row.instrumentId || row.symbol} · ${market}`);
-    lines.push(`Tín hiệu: ${row.status} (${types}) · Giá đóng: ${row.close ?? "—"}`);
-    if (row.assetType === "DEX") lines.push(`Contract: ${row.tokenAddress}`, `Pool: ${row.poolName || row.poolAddress || "—"}`);
-    lines.push("");
-  }
-  const counts = delivery.delivered.reduce((all, row) => ({ ...all, [row.status]: (all[row.status] || 0) + 1 }), {});
-  const scan = scanCounts(rows);
-  if (delivery.delivered.length === 0 && settings.telegram.sendNoSignalSummary) lines.push(trigger === "schedule" ? "Không có tín hiệu BUY/SELL mới trên nến vừa đóng." : "Không có tín hiệu BUY/SELL trên nến hiện tại.");
-  if (delivery.suppressed) lines.push(`Đã bỏ qua ${delivery.suppressed} tín hiệu đã gửi trước đó.`);
-  lines.push(`Đã quét: ${scan.total} · Tín hiệu gửi: BUY ${counts.BUY || 0} · SELL ${counts.SELL || 0} · BOTH ${counts.BOTH || 0}`);
-  lines.push(`Bỏ qua: ${scan.skipped} · Lỗi: ${scan.errors}`);
-  if (scan.errors) lines.push(`Loại lỗi: ${formatScanErrorSummary(rows)}`);
-  return lines.join("\n");
-}
-
-async function runAutomation(timeframe, trigger = "manual") {
+async function runAutomation(timeframe, trigger = "manual", options = {}) {
   const settings = effectiveAutomation(await loadAutomation(automationPath));
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
@@ -301,19 +277,57 @@ async function runAutomation(timeframe, trigger = "manual") {
 
   const allFailed = rows.length > 0 && rows.every(row => row.status === "ERROR");
   const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
-  if (shouldSend) await sendTelegramText(token, settings.telegram.chatId, formatAutomationReport(timeframe, rows, delivery, settings, trigger));
+  const telegramText = shouldSend ? formatAutomationReport(timeframe, rows, delivery, settings, trigger) : "";
+  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
 
-  state.sentKeys = delivery.sentKeys;
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
   state.lastRuns = { ...(state.lastRuns || {}), [`crypto:${timeframe}`]: { at: Date.now(), assetGroup: "crypto", timeframe, trigger, total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed, errors: rows.filter(row => row.status === "ERROR").length, status: "OK" } };
   await saveAutomationState(automationStatePath, state);
-  return { timeframe, total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed, errors: rows.filter(row => row.status === "ERROR").length, messageSent: shouldSend };
+  return { timeframe, total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed, errors: rows.filter(row => row.status === "ERROR").length, messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys };
+}
+
+async function runDexAutomation(timeframe, trigger = "manual", options = {}) {
+  if (!["4H", "8H"].includes(timeframe)) throw new Error("Cảnh báo DEX chỉ hỗ trợ 4H hoặc 8H");
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+  if (!settings.assets.dex.enabled) throw new Error("Watchlist DEX tự động đang tắt");
+
+  const tokens = assertPinnedDexAlertTokens(parseDexTokens(settings.assets.dex.watchlist));
+  const rows = await scanDex(tokens, timeframe);
+  const state = await loadAutomationState(automationStatePath);
+  const delivery = selectDeliverySignals(rows, state.sentKeys, timeframe, trigger);
+  logScanErrors(`dex:${timeframe}`, rows);
+
+  const errors = rows.filter(row => row.status === "ERROR");
+  const allFailed = rows.length > 0 && errors.length === rows.length;
+  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
+  const telegramText = shouldSend ? formatAutomationReport(timeframe, rows, delivery, settings, trigger, "DEX") : "";
+  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
+
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
+  state.lastRuns = {
+    ...(state.lastRuns || {}),
+    [`dex:${timeframe}`]: {
+      at: Date.now(), assetGroup: "dex", timeframe, trigger, total: rows.length,
+      detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+      suppressedSignals: delivery.suppressed, errors: errors.length, status: "OK"
+    }
+  };
+  await saveAutomationState(automationStatePath, state);
+  return {
+    timeframe, total: rows.length, detectedSignals: delivery.detected.length,
+    sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed,
+    errors: errors.length, messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
+  };
 }
 
 function focusDirectionMatched(row) {
   return row.expectedDirection === "BUY" ? Boolean(row.buySignalTypes?.length) : Boolean(row.sellSignalTypes?.length);
 }
 
-async function runFocusAutomation(trigger = "manual") {
+async function runFocusAutomation(trigger = "manual", options = {}) {
   const settings = effectiveAutomation(await loadAutomation(automationPath));
   const now = Date.now();
   const focus = await loadFocusList(focusPath, now, config.focus);
@@ -326,6 +340,7 @@ async function runFocusAutomation(trigger = "manual") {
   const errors = rows.filter(row => row.status === "ERROR");
   logScanErrors("focus", rows);
   const shouldSend = delivery.delivered.length > 0 || (rows.length > 0 && errors.length === rows.length);
+  let telegramText = "";
   if (shouldSend) {
     const lines = ["🎯 Trading Signal · Điểm vào khung nhỏ", `Thời điểm: ${new Date().toLocaleString("vi-VN", { timeZone: settings.timezone })}`, ""];
     for (const row of delivery.delivered) {
@@ -334,15 +349,16 @@ async function runFocusAutomation(trigger = "manual") {
     }
     lines.push(`Đã quét: ${rows.length} · Tín hiệu gửi: ${delivery.delivered.length} · Lỗi: ${errors.length}`);
     if (errors.length) lines.push(`Loại lỗi: ${formatScanErrorSummary(rows)}`);
-    await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, lines.join("\n"));
+    telegramText = lines.join("\n");
+    if (options.deferTelegram !== true) await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, telegramText);
   }
-  state.sentKeys = delivery.sentKeys;
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
   state.lastRuns = { ...(state.lastRuns || {}), focus: { at: now, assetGroup: "focus", trigger, total: rows.length, detectedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, status: "OK" } };
   await saveAutomationState(automationStatePath, state);
-  return { total: rows.length, matchedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, messageSent: shouldSend, results: trigger === "manual" ? rows : undefined };
+  return { total: rows.length, matchedSignals: matched.length, sentSignals: delivery.delivered.length, errors: errors.length, messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys, results: trigger === "manual" ? rows : undefined };
 }
 
-async function runNewCoinAutomation(trigger = "manual") {
+async function runNewCoinAutomation(trigger = "manual", options = {}) {
   const settings = effectiveAutomation(await loadAutomation(automationPath));
   const list = await loadNewCoinList(newCoinPath);
   const active = activeNewCoinItems(list.items);
@@ -362,9 +378,10 @@ async function runNewCoinAutomation(trigger = "manual") {
 
   const allFailed = rows.length > 0 && errors.length === rows.length;
   const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
-  if (shouldSend) await sendTelegramText(token, settings.telegram.chatId, formatNewCoinReport(rows, delivery, settings, trigger, config.newCoins.timeframe));
+  const telegramText = shouldSend ? formatNewCoinReport(rows, delivery, settings, trigger, config.newCoins.timeframe) : "";
+  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
 
-  state.sentKeys = delivery.sentKeys;
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
   state.lastRuns = {
     ...(state.lastRuns || {}),
     newCoins: {
@@ -378,7 +395,7 @@ async function runNewCoinAutomation(trigger = "manual") {
   return {
     timeframe: config.newCoins.timeframe, total: rows.length, paused,
     detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
-    suppressedSignals: delivery.suppressed, errors: errors.length, messageSent: shouldSend,
+    suppressedSignals: delivery.suppressed, errors: errors.length, messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys,
     results: trigger === "manual" ? rows : undefined
   };
 }
@@ -391,6 +408,8 @@ async function schedulerTick() {
     const settings = effectiveAutomation(await loadAutomation(automationPath));
     const clock = localClock(new Date(), settings.timezone);
     const jobs = dueAutomationJobs(clock, settings, config);
+    const reports = [];
+    const scheduledSentKeys = [];
     for (const job of jobs) {
       const slot = `${clock.date}|${clock.time}`;
       const state = await loadAutomationState(automationStatePath);
@@ -398,18 +417,28 @@ async function schedulerTick() {
       state.lastSlots = { ...(state.lastSlots || {}), [job.key]: slot };
       await saveAutomationState(automationStatePath, state);
       try {
-        if (job.timeframe === "FOCUS") await runFocusAutomation("schedule");
-        else if (job.timeframe === "NEW_COIN") await runNewCoinAutomation("schedule");
-        else await runAutomation(job.timeframe, "schedule");
+        let result;
+        if (job.assetGroup === "dex") result = await runDexAutomation(job.timeframe, "schedule", { deferTelegram: true });
+        else if (job.timeframe === "FOCUS") result = await runFocusAutomation("schedule", { deferTelegram: true });
+        else if (job.timeframe === "NEW_COIN") result = await runNewCoinAutomation("schedule", { deferTelegram: true });
+        else result = await runAutomation(job.timeframe, "schedule", { deferTelegram: true });
+        if (result.telegramText) reports.push(result.telegramText);
+        if (Array.isArray(result.sentKeys)) scheduledSentKeys.push(...result.sentKeys);
       }
       catch (error) {
         const latest = await loadAutomationState(automationStatePath);
-        const runKey = job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
-        const assetGroup = job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
+        const runKey = job.assetGroup === "dex" ? `dex:${job.timeframe}` : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
+        const assetGroup = job.assetGroup === "dex" ? "dex" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
         latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup, timeframe: job.timeframe === "NEW_COIN" ? config.newCoins.timeframe : job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
         await saveAutomationState(automationStatePath, latest);
         console.error(`Automation ${job.timeframe}: ${error.message}`);
       }
+    }
+    if (reports.length) {
+      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, formatScheduledBatchReport(reports, settings));
+      const latest = await loadAutomationState(automationStatePath);
+      latest.sentKeys = [...new Set([...(latest.sentKeys || []), ...scheduledSentKeys])];
+      await saveAutomationState(automationStatePath, latest);
     }
   } finally { schedulerBusy = false; }
 }
@@ -460,6 +489,14 @@ const server = http.createServer(async (req, res) => {
     if (authenticated && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && !isSameOrigin(req)) return json(res, 403, { error: "Yêu cầu thay đổi không cùng nguồn" });
 
     if (url.pathname === "/api/config") return json(res, 200, { ...config, app: { name: "Trading Signal", version: packageInfo.version }, capabilities: { dexWeekly: Boolean(process.env.COINGECKO_API_KEY), telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN), stocks: false } });
+    if (url.pathname === "/api/dex/pools" && req.method === "GET") {
+      const [token] = parseDexTokens([{
+        network: url.searchParams.get("network"),
+        tokenAddress: url.searchParams.get("tokenAddress")
+      }]);
+      const pools = await discoverDexPoolOptions(token, { ...config.dex, apiKey: process.env.COINGECKO_API_KEY });
+      return json(res, 200, { ...token, minimumLiquidityUsd: config.dex.minimumLiquidityUsd, pools });
+    }
     if (url.pathname === "/api/automation" && req.method === "GET") {
       const settings = effectiveAutomation(await loadAutomation(automationPath));
       const state = await loadAutomationState(automationStatePath);
@@ -475,6 +512,12 @@ const server = http.createServer(async (req, res) => {
       if (candidate.enabled && !candidate.telegram.chatId) return json(res, 400, { error: "Cần Telegram Chat ID trước khi bật tự động" });
       const hasCex = candidate.assets.cex.enabled && candidate.assets.cex.watchlist.length;
       const hasDex = candidate.assets.dex.enabled && candidate.assets.dex.watchlist.length;
+      const hasDexAlertSchedule = candidate.schedules.dex4h.enabled || candidate.schedules.dex8h.enabled;
+      if (candidate.enabled && hasDexAlertSchedule && !candidate.assets.dex.enabled) return json(res, 400, { error: "Cần bật watchlist DEX trước khi bật lịch DEX 4H/8H" });
+      if (candidate.enabled && hasDexAlertSchedule) {
+        try { assertPinnedDexAlertTokens(candidate.assets.dex.watchlist); }
+        catch (error) { return json(res, 400, { error: error.message }); }
+      }
       const newCoins = await loadNewCoinList(newCoinPath);
       const hasNewCoins = candidate.schedules.newCoinScan.enabled && activeNewCoinItems(newCoins.items).length;
       if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins) return json(res, 400, { error: "Cần bật ít nhất một watchlist CEX, DEX hoặc Coin mới có dữ liệu" });
@@ -494,6 +537,11 @@ const server = http.createServer(async (req, res) => {
       const request = await readJsonBody(req);
       const timeframe = request.timeframe === "1W" ? "1W" : "1D";
       return json(res, 200, await runAutomation(timeframe));
+    }
+    if (url.pathname === "/api/automation/dex/run" && req.method === "POST") {
+      const request = await readJsonBody(req);
+      const timeframe = request.timeframe === "8H" ? "8H" : "4H";
+      return json(res, 200, await runDexAutomation(timeframe));
     }
     if (url.pathname === "/api/focus" && req.method === "GET") {
       const data = await loadFocusList(focusPath, Date.now(), config.focus);
@@ -541,6 +589,18 @@ const server = http.createServer(async (req, res) => {
       const resolved = await resolveAndFetchClosedCandles(instrument, sourceTimeframe, limit, config.exchangePriority, config.quotePriority, true);
       return json(res, 200, chartPayload(resolved.candles, resolved.instrument, timeframe));
     }
+    if (url.pathname === "/api/chart/dex" && req.method === "GET") {
+      const timeframe = config.dex.timeframes.includes(url.searchParams.get("timeframe")) ? url.searchParams.get("timeframe") : config.dex.defaultTimeframe;
+      const [token] = parseDexTokens([{
+        network: url.searchParams.get("network"),
+        tokenAddress: url.searchParams.get("tokenAddress"),
+        poolAddress: url.searchParams.get("poolAddress")
+      }]);
+      const market = await fetchDexCandles(token, timeframe, { ...config.dex, apiKey: process.env.COINGECKO_API_KEY }, Number(config.dex.chartCandles) || 500, true);
+      const payload = chartPayload(market.candles, { asset: market.tokenSymbol, exchange: "DEX", instrumentId: market.tokenSymbol, quote: market.quoteSymbol }, timeframe);
+      payload.market = { ...payload.market, network: market.network, tokenAddress: market.tokenAddress, poolAddress: market.poolAddress, poolName: market.poolName, dex: market.dex, liquidityUsd: market.liquidityUsd, poolPinned: market.poolPinned, suggestedPoolAddress: market.suggestedPoolAddress, poolWarnings: market.warnings };
+      return json(res, 200, payload);
+    }
     if (url.pathname === "/api/market/quotes" && req.method === "POST") {
       const request = await readJsonBody(req);
       if (!Array.isArray(request.items) || !request.items.length) return json(res, 400, { error: "Danh sách coin trống" });
@@ -585,9 +645,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/scan/dex" && req.method === "POST") {
       const request = await readJsonBody(req);
-      const timeframe = request.timeframe === "1W" ? "1W" : "1D";
+      const timeframe = config.dex.timeframes.includes(request.timeframe) ? request.timeframe : config.dex.defaultTimeframe;
       const tokens = parseDexTokens(request.tokens);
       if (!tokens.length) return json(res, 400, { error: "Danh sách token address trống" });
+      if (tokens.length > config.dex.maxTokensPerScan) return json(res, 400, { error: `Mỗi lượt chỉ quét tối đa ${config.dex.maxTokensPerScan} token DEX` });
       return json(res, 200, { generatedAt: Date.now(), timeframe, closedBarsOnly: true, results: await scanDex(tokens, timeframe) });
     }
     const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);

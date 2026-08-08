@@ -10,11 +10,17 @@ import {
 import { buildSmcLayers } from "./smc.js";
 import { distanceBetweenPointers, midpointBetweenPointers, pinchBarCount, plotAnchorRatio } from "./chart-gestures.js";
 import { chartReturnUrl, normalizeAppTab } from "./navigation-state.js";
+import { mergeDexChartItems, readManualDexItems } from "./dex-workspace.js";
 
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
+const chartMode = String(params.get("mode") || "CEX").toUpperCase();
+const isDexChart = chartMode === "DEX";
 let exchange = String(params.get("exchange") || "AUTO").toUpperCase();
 let symbol = String(params.get("symbol") || "BTC").toUpperCase();
+let dexNetwork = String(params.get("network") || "").toLowerCase();
+let dexTokenAddress = String(params.get("tokenAddress") || "");
+let dexPoolAddress = String(params.get("poolAddress") || "");
 let timeframe = ["1H", "4H", "8H", "1D", "1W"].includes(params.get("timeframe")) ? params.get("timeframe") : "1D";
 const returnTab = normalizeAppTab(params.get("returnTab"));
 let payload = null;
@@ -32,11 +38,16 @@ let visibleBarCount = 160;
 let rightOffset = 0;
 const futureBarCount = 20;
 const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
+const dexChartWorkspaceKey = "trading-signal:dex-chart-workspace:v1";
 const smcPreferencesKey = "trading-signal:smc-preferences:v4";
 const legacySmcPreferencesKey = "trading-signal:smc-preferences:v3";
 const smcControlIds = ["showSwingStructure", "showInternalStructure", "showOrderBlocks", "showFairValueGaps", "showEqualLevels", "showPremiumZone", "showDiscountZone", "showEquilibrium"];
 const quoteRefreshMs = 15_000;
 let chartItems = [];
+let dexChartItems = [];
+let manualDexChartItems = [];
+let dexPoolChoices = [];
+let pendingDexToken = null;
 let quotesByKey = new Map();
 let quoteTimer = null;
 let loadSequence = 0;
@@ -50,6 +61,23 @@ const formatPrice = value => Number.isFinite(Number(value)) ? Number(value).toLo
 const formatDate = value => formatChartDate(value, timeframe);
 const timeframeMs = () => ({ "1H": 3_600_000, "4H": 14_400_000, "8H": 28_800_000, "1D": 86_400_000, "1W": 604_800_000 })[timeframe] || 86_400_000;
 const itemKey = item => `${String(item.exchange).toUpperCase()}:${String(item.symbol || item.instrumentId).toUpperCase()}`;
+const dexItemKey = item => `${String(item.network).toLowerCase()}:${String(item.tokenAddress).toLowerCase()}:${String(item.poolAddress || "").toLowerCase()}`;
+const dexTokenKey = item => `${String(item.network).toLowerCase()}:${String(item.tokenAddress).toLowerCase()}`;
+
+function normalizeDexChartItem(item) {
+  const network = String(item?.network || "").toLowerCase();
+  const tokenAddress = String(item?.tokenAddress || "").trim();
+  if (!network || !tokenAddress) return null;
+  return {
+    network,
+    tokenAddress,
+    poolAddress: String(item?.poolAddress || "").trim(),
+    symbol: String(item?.instrumentId || item?.symbol || "TOKEN").toUpperCase(),
+    dex: String(item?.dex || "DEX"),
+    liquidityUsd: Number(item?.liquidityUsd || 0)
+    ,workspaceSource: String(item?.workspaceSource || "")
+  };
+}
 
 function readSmcPreferences() {
   try {
@@ -75,6 +103,17 @@ function normalizeChartItem(item) {
 }
 
 function readChartWorkspace() {
+  if (isDexChart) {
+    chartItems = [];
+    let cached = null;
+    let saved = null;
+    try { cached = JSON.parse(sessionStorage.getItem("trading-signal:dex-scan:v1") || "null"); } catch { /* chỉ hiển thị token đang mở */ }
+    try { saved = JSON.parse(localStorage.getItem(dexChartWorkspaceKey) || "null"); } catch { /* chỉ dùng dữ liệu trong phiên */ }
+    const current = normalizeDexChartItem({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, symbol });
+    manualDexChartItems = readManualDexItems(saved, normalizeDexChartItem);
+    dexChartItems = mergeDexChartItems({ current, scannedItems: cached?.data?.results || [], manualItems: manualDexChartItems, normalize: normalizeDexChartItem });
+    return;
+  }
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(chartWorkspaceKey) || "null"); } catch { /* dùng coin trên URL */ }
   const urlItem = normalizeChartItem({ exchange, symbol });
@@ -85,9 +124,16 @@ function readChartWorkspace() {
 }
 
 function saveChartWorkspace() {
+  if (isDexChart) return;
   try {
     localStorage.setItem(chartWorkspaceKey, JSON.stringify({ selected: `${exchange}:${symbol}`, timeframe, items: chartItems }));
   } catch { /* danh sách vẫn hoạt động trong phiên hiện tại */ }
+}
+
+function saveDexChartWorkspace() {
+  if (!isDexChart) return;
+  try { localStorage.setItem(dexChartWorkspaceKey, JSON.stringify({ manualItems: manualDexChartItems })); }
+  catch { /* danh sách vẫn hoạt động trong phiên hiện tại */ }
 }
 
 function formatQuotePrice(value) {
@@ -98,6 +144,16 @@ function formatQuotePrice(value) {
 }
 
 function renderChartList() {
+  if (isDexChart) {
+    const selectedKey = dexItemKey({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress });
+    $("#chartListCount").textContent = String(dexChartItems.length);
+    $("#chartCoinList").innerHTML = dexChartItems.length ? dexChartItems.map(item => {
+      const liquidity = Number(item.liquidityUsd);
+      const liquidityText = Number.isFinite(liquidity) && liquidity > 0 ? `$${liquidity.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
+      return `<button class="chart-coin-row${dexItemKey(item) === selectedKey ? " selected" : ""}" type="button" data-dex-select-key="${h(dexItemKey(item))}"><span class="chart-pair"><strong>${h(item.symbol)}</strong><small>${h(item.network)}</small></span><span class="chart-quote-price">${h(item.dex)}</span><span class="chart-change unavailable">${h(liquidityText)}</span><span class="chart-remove" role="button" tabindex="0" title="Xóa khỏi danh sách" data-dex-remove-key="${h(dexItemKey(item))}">×</span></button>`;
+    }).join("") : '<div class="chart-list-empty">Không có token DEX trong lượt quét gần nhất.</div>';
+    return;
+  }
   $("#chartListCount").textContent = String(chartItems.length);
   if (!chartItems.length) {
     $("#chartCoinList").innerHTML = '<div class="chart-list-empty">Nhập mã coin phía trên để bắt đầu.</div>';
@@ -118,6 +174,7 @@ function renderChartList() {
 
 async function refreshQuotes({ announce = false } = {}) {
   clearTimeout(quoteTimer);
+  if (isDexChart) return;
   if (!chartItems.length || document.hidden) {
     quoteTimer = setTimeout(() => refreshQuotes(), quoteRefreshMs);
     return;
@@ -145,6 +202,15 @@ function selectChartItem(item) {
   exchange = item.exchange;
   symbol = item.symbol;
   saveChartWorkspace();
+  renderChartList();
+  load();
+}
+
+function selectDexChartItem(item) {
+  dexNetwork = item.network;
+  dexTokenAddress = item.tokenAddress;
+  dexPoolAddress = item.poolAddress;
+  symbol = item.symbol;
   renderChartList();
   load();
 }
@@ -571,21 +637,37 @@ async function load() {
   $("#chartState").className = "chart-state"; $("#chartState").textContent = "Đang lấy dữ liệu biểu đồ…"; payload = null; layout = null; smcLayers = null; updateSmcTrend();
   document.querySelectorAll("[data-timeframe]").forEach(button => button.classList.toggle("active", button.dataset.timeframe === timeframe));
   try {
-    const query = new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
-    const response = await fetch(`/api/chart/cex?${query}`); const data = await response.json();
+    const query = isDexChart
+      ? new URLSearchParams({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, timeframe })
+      : new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
+    const response = await fetch(`${isDexChart ? "/api/chart/dex" : "/api/chart/cex"}?${query}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     if (sequence !== loadSequence) return;
     payload = data; smcLayers = buildSmcLayers(data.candles); $("#chartState").classList.add("hidden");
     exchange = data.market.exchange; symbol = data.market.instrumentId;
-    const resolvedItem = { exchange, symbol };
-    const requestedIndex = chartItems.findIndex(item => itemKey(item) === requestedKey);
-    const resolvedIndex = chartItems.findIndex(item => itemKey(item) === itemKey(resolvedItem));
-    if (requestedIndex >= 0 && resolvedIndex < 0) chartItems[requestedIndex] = resolvedItem;
-    else if (requestedIndex >= 0 && resolvedIndex !== requestedIndex) chartItems.splice(requestedIndex, 1);
+    if (isDexChart) dexPoolAddress = data.market.poolAddress;
+    if (isDexChart) {
+      const selected = dexChartItems.find(item => item.network === dexNetwork && item.tokenAddress.toLowerCase() === dexTokenAddress.toLowerCase() && (!item.poolAddress || item.poolAddress.toLowerCase() === dexPoolAddress.toLowerCase()));
+      if (selected) {
+        Object.assign(selected, { poolAddress: dexPoolAddress, symbol, dex: data.market.dex, liquidityUsd: data.market.liquidityUsd });
+        saveDexChartWorkspace();
+      }
+    } else {
+      const resolvedItem = { exchange, symbol };
+      const requestedIndex = chartItems.findIndex(item => itemKey(item) === requestedKey);
+      const resolvedIndex = chartItems.findIndex(item => itemKey(item) === itemKey(resolvedItem));
+      if (requestedIndex >= 0 && resolvedIndex < 0) chartItems[requestedIndex] = resolvedItem;
+      else if (requestedIndex >= 0 && resolvedIndex !== requestedIndex) chartItems.splice(requestedIndex, 1);
+    }
     $("#chartTitle").textContent = `${symbol} · ${timeframe}`;
     const liveBars = data.candles.filter(candle => !candle.isClosed).length;
-    $("#chartMeta").textContent = `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
-    history.replaceState(null, "", `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab })}`);
+    $("#chartMeta").textContent = isDexChart
+      ? `${data.market.network} · ${data.market.dex} · $${Number(data.market.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`
+      : `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
+    const nextParams = isDexChart
+      ? { mode: "DEX", network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, symbol, timeframe, returnTab }
+      : { exchange, symbol, timeframe, returnTab };
+    history.replaceState(null, "", `/chart.html?${new URLSearchParams(nextParams)}`);
     document.title = `${symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
   } catch (error) {
     if (sequence !== loadSequence) return;
@@ -726,6 +808,30 @@ $("#autoScale").addEventListener("click", resetYScale);
 $("#resetView").addEventListener("click", resetView);
 new ResizeObserver(draw).observe(canvas);
 $("#chartCoinList").addEventListener("click", event => {
+  if (isDexChart) {
+    const remove = event.target.closest("[data-dex-remove-key]");
+    if (remove) {
+      event.stopPropagation();
+      if (dexChartItems.length === 1) {
+        $("#chartListState").textContent = "Danh sách cần giữ ít nhất token đang mở.";
+        return;
+      }
+      const key = remove.dataset.dexRemoveKey;
+      const index = dexChartItems.findIndex(item => dexItemKey(item) === key);
+      if (index < 0) return;
+      const removingSelected = key === dexItemKey({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress });
+      manualDexChartItems = manualDexChartItems.filter(item => dexTokenKey(item) !== dexTokenKey(dexChartItems[index]));
+      dexChartItems.splice(index, 1);
+      saveDexChartWorkspace();
+      if (removingSelected) selectDexChartItem(dexChartItems[Math.min(index, dexChartItems.length - 1)]);
+      else renderChartList();
+      return;
+    }
+    const row = event.target.closest("[data-dex-select-key]");
+    const item = row && dexChartItems.find(candidate => dexItemKey(candidate) === row.dataset.dexSelectKey);
+    if (item && dexItemKey(item) !== dexItemKey({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress })) selectDexChartItem(item);
+    return;
+  }
   const remove = event.target.closest("[data-remove-key]");
   const row = event.target.closest("[data-select-key]");
   if (remove) {
@@ -751,6 +857,52 @@ $("#chartCoinList").addEventListener("click", event => {
 
 $("#addChartCoin").addEventListener("submit", async event => {
   event.preventDefault();
+  if (isDexChart) {
+    const network = $("#chartDexNetwork").value;
+    const input = $("#chartCoinInput");
+    const tokenAddress = input.value.trim();
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    if (!tokenAddress) return;
+    const pendingKey = `${network}:${tokenAddress.toLowerCase()}`;
+    if (pendingDexToken?.key === pendingKey && dexPoolChoices.length) {
+      const selectedPool = dexPoolChoices.find(pool => pool.poolAddress === $("#chartDexPoolSelect").value);
+      if (!selectedPool) return;
+      const item = normalizeDexChartItem({ network, tokenAddress, poolAddress: selectedPool.poolAddress, symbol: selectedPool.poolName || "TOKEN", dex: selectedPool.dex, liquidityUsd: selectedPool.liquidityUsd, workspaceSource: "manual" });
+      const existingIndex = dexChartItems.findIndex(found => found.network === network && found.tokenAddress.toLowerCase() === tokenAddress.toLowerCase());
+      if (existingIndex >= 0) dexChartItems[existingIndex] = item; else dexChartItems.push(item);
+      const manualIndex = manualDexChartItems.findIndex(found => dexTokenKey(found) === dexTokenKey(item));
+      if (manualIndex >= 0) manualDexChartItems[manualIndex] = item; else manualDexChartItems.push(item);
+      saveDexChartWorkspace();
+      input.value = "";
+      dexPoolChoices = []; pendingDexToken = null;
+      $("#chartDexPoolSelect").hidden = true;
+      button.textContent = "Tìm pool";
+      $("#chartListState").textContent = `Đã thêm pool ${selectedPool.poolName || selectedPool.poolAddress}.`;
+      selectDexChartItem(item);
+      return;
+    }
+    button.disabled = true;
+    $("#chartListState").textContent = "Đang tìm pool…";
+    try {
+      const response = await fetch(`/api/dex/pools?${new URLSearchParams({ network, tokenAddress })}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      dexPoolChoices = data.pools || [];
+      if (!dexPoolChoices.length) throw new Error("Không tìm thấy pool cho contract này trên chain đã chọn");
+      pendingDexToken = { key: pendingKey };
+      const select = $("#chartDexPoolSelect");
+      select.innerHTML = dexPoolChoices.map(pool => `<option value="${h(pool.poolAddress)}">${h(`${pool.poolName || pool.quoteSymbol} · ${pool.dex} · TVL $${Number(pool.liquidityUsd || 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`)}</option>`).join("");
+      select.hidden = false;
+      button.textContent = "+ Thêm pool";
+      $("#chartListState").textContent = `Tìm thấy ${dexPoolChoices.length} pool; hãy chọn pool cần dùng.`;
+    } catch (error) {
+      dexPoolChoices = []; pendingDexToken = null;
+      $("#chartDexPoolSelect").hidden = true;
+      button.textContent = "Tìm pool";
+      $("#chartListState").textContent = `Không tìm được pool: ${error.message}`;
+    } finally { button.disabled = false; }
+    return;
+  }
   const input = $("#chartCoinInput");
   const value = input.value.trim().toUpperCase();
   if (!value) return;
@@ -781,11 +933,36 @@ $("#addChartCoin").addEventListener("submit", async event => {
 });
 
 document.addEventListener("visibilitychange", () => {
+  if (isDexChart) return;
   if (!document.hidden) refreshQuotes();
   else clearTimeout(quoteTimer);
 });
 
 readSmcPreferences();
+if (isDexChart) {
+  let chartConfig = {};
+  try {
+    const response = await fetch("/api/config");
+    if (response.ok) chartConfig = await response.json();
+  } catch { /* dùng danh sách chain mặc định */ }
+  const networks = chartConfig.dex?.networks || ["solana", "eth", "base", "bsc"];
+  const networkLabels = chartConfig.dex?.networkLabels || {};
+  const form = $(".chart-add-form");
+  form.classList.add("dex-chart-add-form");
+  form.innerHTML = `<select id="chartDexNetwork" aria-label="Blockchain">${networks.map(value => `<option value="${h(value)}">${h(networkLabels[value] || value)}</option>`).join("")}</select><input id="chartCoinInput" type="text" autocomplete="off" spellcheck="false" placeholder="Dán token contract address" aria-label="Địa chỉ hợp đồng token"><select id="chartDexPoolSelect" aria-label="Pool DEX" hidden></select><button type="submit">Tìm pool</button>`;
+  const resetPoolPicker = () => {
+    dexPoolChoices = []; pendingDexToken = null;
+    $("#chartDexPoolSelect").hidden = true;
+    form.querySelector('button[type="submit"]').textContent = "Tìm pool";
+  };
+  $("#chartDexNetwork").addEventListener("change", resetPoolPicker);
+  $("#chartCoinInput").addEventListener("input", resetPoolPicker);
+  $(".chart-watchlist-heading h2").textContent = "Danh sách DEX";
+  $("#chartListState").textContent = "Chọn chain, dán contract rồi chọn pool.";
+  const columns = document.querySelectorAll(".chart-list-columns span");
+  ["Token", "DEX", "Thanh khoản"].forEach((label, index) => { if (columns[index]) columns[index].textContent = label; });
+  document.querySelectorAll('[data-timeframe="1W"]').forEach(button => { button.hidden = true; });
+}
 readChartWorkspace();
 renderChartList();
 refreshQuotes({ announce: true });

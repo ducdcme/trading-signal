@@ -1,5 +1,74 @@
 # Changelog
 
+## 3.1.0 - 2026-08-08
+
+- Phát hành chính thức DEX scanner/chart `1H · 4H · 8H · D1`, chọn chain/contract/pool và workspace chart riêng.
+- Hoàn thiện cảnh báo Telegram DEX `4H/8H` theo pool ghim và chống gửi trùng theo pool.
+- Dùng một cấu hình độ trễ sau nến đóng cho Theo dõi, Coin mới 8H và DEX 4H/8H.
+- Gộp mọi nhóm tự động đến hạn cùng thời điểm vào một bản tin Telegram duy nhất.
+- Khi không có tín hiệu mới, bản tin tự động chỉ hiển thị thống kê lượt quét, không thêm câu “không có tín hiệu”.
+- Chỉ ghi khóa chống gửi trùng sau khi bản tin gộp được gửi thành công.
+- Automated test: 120/120 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.6 - 2026-08-08
+
+- Bổ sung scheduler và Telegram riêng cho DEX `4H/8H`; lịch chạy sau các mốc nến đóng theo giờ Việt Nam và được cấu hình trong `config.json`.
+- Thêm nút chạy tay **DEX 4H** và **DEX 8H** trong tab Tự động để nghiệm thu trước khi bật lịch.
+- Cảnh báo DEX khung nhỏ bắt buộc ghim pool; nội dung Telegram ghi rõ chain, contract và pool đã dùng.
+- Đưa `poolAddress` vào khóa chống gửi trùng để cùng token ở hai pool khác nhau không bị coi là một tín hiệu.
+- Giữ chính sách Telegram chỉ báo loại/số lỗi; chi tiết exception chỉ ghi trong log server.
+- Hai lịch DEX mặc định tắt khi nâng cấp; người dùng chủ động bật từng khung sau khi kiểm thử.
+- Sửa import watchlist Automation để không làm mất pool address trong file `.txt`.
+- Automated test: 119/119 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.5 - 2026-08-07
+
+- Tách lượt quét nhiều token DEX thành các request tuần tự theo từng token, tránh một request tổng kéo dài vượt timeout reverse proxy; giao diện hiển thị tiến độ từng token.
+- Lỗi riêng của một token không làm mất kết quả các token đã quét thành công trong cùng lượt.
+- Danh sách chart DEX từ scanner được thay toàn bộ bằng lượt quét gần nhất, không cộng dồn token của các lượt trước.
+- Tách riêng token thêm thủ công ngay trên chart; nhóm này tiếp tục được giữ qua các lượt quét và có thể xóa riêng.
+- Reset dữ liệu workspace kiểu cũ của `dev.4` vì dữ liệu cũ chưa phân biệt token quét với token thêm thủ công.
+- Giữ nguyên production `3.0.1`; candidate chỉ dùng trên subdomain test.
+- Automated test: 114/114 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.4 - 2026-08-07
+
+- Ẩn input file gốc khi giao diện đã có nút nhập `.txt` tùy biến ở CEX và DEX.
+- Retry/backoff cả lỗi kết nối `fetch failed` và timeout, ngoài `429/5xx` đã hỗ trợ.
+- Gộp request tải nến đang chạy; màn quét và chart dùng chung cache theo đúng pool.
+- Khi nguồn DEX tạm lỗi, dùng cache nến gần nhất nếu vẫn đủ dữ liệu và hiển thị cảnh báo.
+- Giữ nguyên production `3.0.1`; candidate chỉ dùng trên subdomain test.
+- Automated test: 111/111 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.3 - 2026-08-07
+
+- Cache kết quả tìm pool 30 phút và gộp các request tìm cùng chain/contract đang chạy để giảm số lần gọi GeckoTerminal.
+- Tự retry lỗi `429` và `5xx` theo backoff; các giới hạn retry, thời gian chờ và cache pool nằm trong `config.json`.
+- Quét và chart dùng lại pool/nến vừa tải khi dữ liệu đã đủ, giảm thời gian chờ sau bước chọn pool.
+- Sửa chart DEX: danh sách token nằm ở cột phải như chart CEX, cho phép chuyển/xóa token và thêm trực tiếp theo luồng chọn chain → dán contract → tìm/chọn pool; chỉ xếp xuống dưới trên màn hình mobile.
+- Lưu workspace DEX riêng trong trình duyệt, giữ một pool đã chọn cho mỗi chain + contract và không trộn với danh sách CEX.
+- Automated test: 109/109 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.2 - 2026-08-07
+
+- Đổi form DEX sang chọn chain từ dropdown, dán contract address, xem danh sách pool rồi chủ động chọn/ghim.
+- Danh sách pool hiển thị cặp, DEX, địa chỉ pool, thanh khoản và volume 24h; pool dưới ngưỡng vẫn được phép chọn thủ công.
+- Bỏ giới hạn quote pair USDT/USDC; cơ chế tương thích khi chưa ghim pool chọn pool đủ ngưỡng có thanh khoản cao nhất.
+- Hạ `minimumLiquidityUsd` mặc định từ 100.000 USD xuống 10.000 USD.
+- Bổ sung scanner và chart DEX khung D1; giữ nguyên quy tắc Signal/SMC chỉ xác nhận bằng nến đã đóng.
+- Automated test: 107/107 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.1.0-dev.1 - 2026-08-07
+
+- Nâng tab DEX sang các khung nhỏ `1H · 4H · 8H`; 8H được ghép từ đúng hai nến 4H của cùng pool.
+- Cho phép nhập `chain:token_address:pool_address` để ghim pool; nếu bỏ trống pool, server tự chọn pool USDT/USDC phù hợp.
+- Không nối dữ liệu từ nhiều pool; pool ghim được giữ nguyên ngay cả khi có pool thanh khoản cao hơn và chỉ phát cảnh báo đề xuất.
+- Hiển thị thanh khoản, loại pool ghim/tự chọn, contract và pool address trong kết quả.
+- Thêm chart DEX dùng chung EMA, Signal, SMC và hỗ trợ nến đang chạy; tín hiệu vẫn chỉ tính trên nến đã đóng.
+- Đưa khung DEX, giới hạn token, số nến, số trang pool, concurrency và tỷ lệ cảnh báo chuyển pool vào `config.json`.
+- Mặc định tối đa 10 token/lượt, quét tuần tự và đọc một trang pool để giảm tải GeckoTerminal.
+- Automated test: 106/106 đạt; kiểm tra cú pháp, lượt quét Solana 4H và chart DEX 8H thực tế đạt.
+
 ## 3.0.1 - 2026-08-07
 
 - Phát hành chính thức scheduler và Telegram cho Coin mới trên nến `8H` đã đóng tại `07:05 · 15:05 · 23:05` giờ Việt Nam.

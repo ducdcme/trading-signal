@@ -1,5 +1,12 @@
 # Tự động hóa và Telegram
 
+## Trạng thái v3.1.0
+
+- DEX `4H/8H` đã có scheduler, nút chạy tay, Telegram theo đúng pool ghim và chống gửi trùng theo pool.
+- Theo dõi 4H/8H, Coin mới 8H và DEX 4H/8H dùng chung một cấu hình phút chờ sau nến đóng.
+- Các job tự động trùng thời điểm được gom thành một bản tin Telegram; lượt không có tín hiệu chỉ hiển thị thống kê quét.
+- Bản `3.1.0` đã qua 120/120 test và sẵn sàng triển khai production.
+
 ## Trạng thái v3.0.1
 
 - Nến 8H đã được tổng hợp từ đúng hai nến 4H đã đóng theo ranh giới UTC.

@@ -20,15 +20,39 @@
     "timeframe": "8H",
     "exchangePriority": ["BINANCE", "OKX", "BYBIT"],
     "scanHours": [7, 15, 23],
-    "scanMinute": 5,
     "minimumCandles": 61
   },
   "dex": {
-    "quotePriority": ["USDT", "USDC"],
-    "minimumLiquidityUsd": 100000,
-    "poolPages": 3,
+    "timeframes": ["1H", "4H", "8H", "1D"],
+    "defaultTimeframe": "4H",
+    "maxTokensPerScan": 10,
+    "minimumCandles": 100,
+    "chartCandles": 500,
+    "scanConcurrency": 1,
+    "minimumLiquidityUsd": 10000,
+    "poolSwitchLiquidityRatio": 1.5,
+    "poolPages": 1,
     "requestIntervalMs": 6500,
+    "rateLimitRetries": 3,
+    "retryBaseMs": 10000,
+    "poolCacheMinutes": 30,
     "cacheMinutes": 10,
-    "networks": ["solana", "eth", "base", "bsc", "arbitrum", "polygon_pos", "avax", "optimism"]
+    "alerts": {
+      "closeHours": {
+        "4H": [3, 7, 11, 15, 19, 23],
+        "8H": [7, 15, 23]
+      }
+    },
+    "networks": ["solana", "eth", "base", "bsc", "arbitrum", "polygon_pos", "avax", "optimism"],
+    "networkLabels": {
+      "solana": "Solana",
+      "eth": "Ethereum",
+      "base": "Base",
+      "bsc": "BNB Smart Chain",
+      "arbitrum": "Arbitrum",
+      "polygon_pos": "Polygon PoS",
+      "avax": "Avalanche",
+      "optimism": "Optimism"
+    }
   }
 }
