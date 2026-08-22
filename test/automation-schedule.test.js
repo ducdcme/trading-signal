@@ -11,7 +11,8 @@ const settings = {
     focusScan: { enabled: true },
     newCoinScan: { enabled: true },
     dex4h: { enabled: true },
-    dex8h: { enabled: true }
+    dex8h: { enabled: true },
+    metalsDaily: { enabled: true, time: "07:10" }
   }
 };
 
@@ -41,6 +42,18 @@ test("scheduler dispatches DEX 4H and 8H with the shared closed-candle delay", (
 test("scheduler groups all small-timeframe jobs at the shared 8H close slot", () => {
   const jobs = dueAutomationJobs({ date: "2026-08-07", time: "07:05", day: 5 }, settings, config);
   assert.deepEqual(jobs.map(job => job.timeframe).sort(), ["4H", "8H", "FOCUS", "NEW_COIN"]);
+});
+
+test("scheduler dispatches the fixed metals D1 job at its configured time", () => {
+  const jobs = dueAutomationJobs({ date: "2026-08-07", time: "07:10", day: 5 }, settings, config);
+  assert.deepEqual(jobs.filter(job => job.assetGroup === "metals"), [{ key: "metalsDaily", timeframe: "1D", assetGroup: "metals", due: true }]);
+  assert.equal(dueAutomationJobs({ date: "2026-08-07", time: "07:09", day: 5 }, settings, config).some(job => job.assetGroup === "metals"), false);
+});
+
+test("metals report can join another automatic group in the same scheduler slot", () => {
+  const grouped = { ...settings, schedules: { ...settings.schedules, metalsDaily: { enabled: true, time: "07:10" } } };
+  const jobs = dueAutomationJobs({ date: "2026-08-07", time: "07:10", day: 5 }, grouped, config);
+  assert.deepEqual(jobs.map(job => job.key).sort(), ["cryptoDaily", "metalsDaily"]);
 });
 
 test("scheduler does not dispatch Coin mới when master or its schedule is disabled", () => {

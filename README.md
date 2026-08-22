@@ -1,8 +1,8 @@
 # Trading Signal
 
-Phiên bản phát hành: **3.1.0**, phát triển từ bản production **3.0.1**. Bản này hoàn thiện DEX `1H · 4H · 8H · D1`, chọn và ghim pool trực quan, cache/retry cho nguồn dữ liệu chập chờn, quét từng token bằng request riêng, workspace DEX trên chart và cảnh báo Telegram cho DEX `4H/8H`.
+Phiên bản chính thức: **3.2.0**, phát triển từ production **3.1.0**. Bản này kết nối `metals-data-collector v0.3.1`, giữ điều hướng phân tầng, hiển thị biểu đồ D1/W1, so sánh giá quy đổi và bổ sung cảnh báo Telegram D1 cho giá bán trong nước.
 
-Ứng dụng quét tín hiệu đa tài sản trên dữ liệu nến đã đóng. Hiện tại CEX Crypto và DEX Crypto hoạt động; kiến trúc đã dành sẵn provider, watchlist và lịch riêng cho chứng khoán Việt Nam.
+Ứng dụng quét tín hiệu đa tài sản trên dữ liệu nến đã đóng. CEX, DEX và Vàng–Bạc đang hoạt động; kiến trúc đã dành sẵn provider, watchlist và lịch riêng cho chứng khoán Việt Nam.
 
 ## Chạy trên Windows
 
@@ -20,6 +20,7 @@ Các biến có sẵn trong `.env.example`:
 - `PORT`: cổng chạy web, mặc định `3210`.
 - `HOST`: mặc định `127.0.0.1`, chỉ cho phép truy cập từ máy chạy tool.
 - `DATA_DIR`: thư mục lưu watchlist, lịch chạy và trạng thái chống gửi trùng. Trên server nên đặt ngoài thư mục source.
+- `METALS_API_URL`: API đọc nội bộ của Metals Data Collector, mặc định `http://127.0.0.1:8787/`.
 - `COINGECKO_API_KEY`: đang được dùng cho DEX W1.
 - `SSI_API_KEY`, `SSI_API_SECRET`: chuẩn bị cho tab VN Stocks, chưa được dùng.
 - `TELEGRAM_BOT_TOKEN`: token lấy từ BotFather, đang dùng để gửi cảnh báo.
@@ -28,6 +29,25 @@ Các biến có sẵn trong `.env.example`:
 - `AUTH_SESSION_HOURS`: thời hạn phiên đăng nhập, mặc định 12 giờ.
 
 Không đưa file `.env` lên Git và không gửi API key qua chat. File này đã được thêm vào `.gitignore`.
+
+## Vàng & Bạc v3.2.0
+
+Trading Signal không tự thu thập giá kim loại. Server đọc snapshot và nến D1 từ
+`metals-data-collector`, sau đó chuẩn hóa sang hợp đồng chart chung:
+
+- Việt Nam: `VN_GOLD_SJC_BAR`, `VN_GOLD_RING_9999`, `VN_SILVER_999_KG`, tách BUY/SELL.
+- Thế giới: `XAU_USD`, `XAG_USD`, `USD_VND`, dùng MID.
+- So sánh: XAU/USD quy đổi sang VND/lượng; XAG/USD quy đổi sang VND/kg; premium/discount tính riêng cho giá mua và giá bán trong nước.
+- Cảnh báo: chỉ `SELL` D1 đã đóng của Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999; không cảnh báo XAU/XAG/USDVND.
+- Lịch mặc định `07:10` giờ Việt Nam và tắt khi nâng cấp; bản phát hành đã được nghiệm thu cả chạy tay và scheduler trên VPS demo.
+- Chart: D1 và W1, EMA21/EMA55, Signal và SMC; chỉ nến đã đóng được dùng để xác nhận.
+- Với lịch sử Việt Nam chỉ có một giá mỗi ngày, chart dựng nến biến động bằng `Open = Close ngày trước`; nến có nhiều mẫu trong ngày vẫn giữ OHLC quan sát thật.
+
+Trên VPS, thêm vào `.env` của Trading Signal:
+
+```text
+METALS_API_URL=http://127.0.0.1:8787/
+```
 
 ## Bảo mật đăng nhập
 

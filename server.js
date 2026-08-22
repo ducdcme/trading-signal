@@ -27,6 +27,7 @@ import { activeNewCoinItems, formatNewCoinReport } from "./lib/new-coin-automati
 import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "./lib/automation-schedule.js";
 import { formatAutomationReport, formatScheduledBatchReport } from "./lib/automation-report.js";
 import { assertPinnedDexAlertTokens } from "./lib/dex-alerts.js";
+import { buildMetalComparison, fetchMetalCandles, fetchMetalsLatest, METAL_ALERT_PRODUCTS, METAL_PRODUCTS } from "./lib/metals.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -44,6 +45,10 @@ const focusPath = join(dataDir, "focus-watchlist.json");
 const newCoinPath = join(dataDir, "new-coin-watchlist.json");
 const startedAt = Date.now();
 const production = process.env.NODE_ENV === "production";
+const metalsApi = {
+  baseUrl: process.env.METALS_API_URL || "http://127.0.0.1:8787/",
+  timeoutMs: Number(config.metals?.requestTimeoutMs) || 10_000
+};
 const auth = loadAuthConfig();
 if (production && !auth.enabled) throw new Error("Production bị khóa: hãy chạy npm run generate-auth và cấu hình AUTH_* trong .env");
 if (!auth.enabled) console.warn("CẢNH BÁO: xác thực đang tắt vì chưa cấu hình AUTH_* (chỉ phù hợp phát triển local)");
@@ -252,6 +257,43 @@ async function scanDex(tokens, timeframe) {
   });
 }
 
+async function scanMetals() {
+  const minimumCandles = Number(config.metals?.minimumAlertCandles) || 100;
+  return mapLimited(METAL_ALERT_PRODUCTS, 3, async productId => {
+    const meta = METAL_PRODUCTS[productId];
+    try {
+      const market = await fetchMetalCandles(productId, "SELL", config.metals.chartCandles, {
+        ...metalsApi,
+        completeOnly: true
+      });
+      return {
+        assetType: "METALS",
+        exchange: "METALS_DATA_COLLECTOR",
+        instrumentId: productId,
+        productId,
+        productName: meta.name,
+        side: "SELL",
+        timeframe: "1D",
+        currency: meta.currency,
+        unit: meta.unit,
+        ...analyzeCandles(market.candles, "1D", minimumCandles)
+      };
+    } catch (error) {
+      return {
+        assetType: "METALS",
+        exchange: "METALS_DATA_COLLECTOR",
+        instrumentId: productId,
+        productId,
+        productName: meta.name,
+        side: "SELL",
+        timeframe: "1D",
+        status: "ERROR",
+        error: error.message
+      };
+    }
+  });
+}
+
 function effectiveAutomation(settings) {
   return {
     ...settings,
@@ -320,6 +362,43 @@ async function runDexAutomation(timeframe, trigger = "manual", options = {}) {
     timeframe, total: rows.length, detectedSignals: delivery.detected.length,
     sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed,
     errors: errors.length, messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
+  };
+}
+
+async function runMetalsAutomation(trigger = "manual", options = {}) {
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+  if (!settings.assets.metals.enabled) throw new Error("Cảnh báo Vàng–Bạc đang tắt");
+
+  const rows = await scanMetals();
+  const state = await loadAutomationState(automationStatePath);
+  const delivery = selectDeliverySignals(rows, state.sentKeys, "1D", trigger);
+  logScanErrors("metals:1D", rows);
+  const errors = rows.filter(row => row.status === "ERROR");
+  const allFailed = rows.length > 0 && errors.length === rows.length;
+  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
+  const telegramText = shouldSend ? formatAutomationReport("1D", rows, delivery, settings, trigger, "VÀNG & BẠC SELL") : "";
+  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
+
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
+  state.lastRuns = {
+    ...(state.lastRuns || {}),
+    "metals:1D": {
+      at: Date.now(), assetGroup: "metals", timeframe: "1D", side: "SELL", trigger,
+      total: rows.length, detectedSignals: delivery.detected.length,
+      sentSignals: delivery.delivered.length, suppressedSignals: delivery.suppressed,
+      errors: errors.length, status: "OK"
+    }
+  };
+  await saveAutomationState(automationStatePath, state);
+  return {
+    timeframe: "1D", side: "SELL", total: rows.length,
+    detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+    suppressedSignals: delivery.suppressed, errors: errors.length,
+    messageSent: shouldSend && options.deferTelegram !== true,
+    telegramText, sentKeys: delivery.sentKeys
   };
 }
 
@@ -419,6 +498,7 @@ async function schedulerTick() {
       try {
         let result;
         if (job.assetGroup === "dex") result = await runDexAutomation(job.timeframe, "schedule", { deferTelegram: true });
+        else if (job.assetGroup === "metals") result = await runMetalsAutomation("schedule", { deferTelegram: true });
         else if (job.timeframe === "FOCUS") result = await runFocusAutomation("schedule", { deferTelegram: true });
         else if (job.timeframe === "NEW_COIN") result = await runNewCoinAutomation("schedule", { deferTelegram: true });
         else result = await runAutomation(job.timeframe, "schedule", { deferTelegram: true });
@@ -427,8 +507,8 @@ async function schedulerTick() {
       }
       catch (error) {
         const latest = await loadAutomationState(automationStatePath);
-        const runKey = job.assetGroup === "dex" ? `dex:${job.timeframe}` : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
-        const assetGroup = job.assetGroup === "dex" ? "dex" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
+        const runKey = job.assetGroup === "dex" ? `dex:${job.timeframe}` : job.assetGroup === "metals" ? "metals:1D" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
+        const assetGroup = job.assetGroup === "dex" ? "dex" : job.assetGroup === "metals" ? "metals" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
         latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup, timeframe: job.timeframe === "NEW_COIN" ? config.newCoins.timeframe : job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
         await saveAutomationState(automationStatePath, latest);
         console.error(`Automation ${job.timeframe}: ${error.message}`);
@@ -488,7 +568,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (authenticated && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && !isSameOrigin(req)) return json(res, 403, { error: "Yêu cầu thay đổi không cùng nguồn" });
 
-    if (url.pathname === "/api/config") return json(res, 200, { ...config, app: { name: "Trading Signal", version: packageInfo.version }, capabilities: { dexWeekly: Boolean(process.env.COINGECKO_API_KEY), telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN), stocks: false } });
+    if (url.pathname === "/api/config") return json(res, 200, { ...config, app: { name: "Trading Signal", version: packageInfo.version }, capabilities: { dexWeekly: Boolean(process.env.COINGECKO_API_KEY), telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN), metals: true, metalsAutomation: true, stocks: false } });
     if (url.pathname === "/api/dex/pools" && req.method === "GET") {
       const [token] = parseDexTokens([{
         network: url.searchParams.get("network"),
@@ -512,6 +592,7 @@ const server = http.createServer(async (req, res) => {
       if (candidate.enabled && !candidate.telegram.chatId) return json(res, 400, { error: "Cần Telegram Chat ID trước khi bật tự động" });
       const hasCex = candidate.assets.cex.enabled && candidate.assets.cex.watchlist.length;
       const hasDex = candidate.assets.dex.enabled && candidate.assets.dex.watchlist.length;
+      const hasMetals = candidate.assets.metals.enabled && candidate.schedules.metalsDaily.enabled;
       const hasDexAlertSchedule = candidate.schedules.dex4h.enabled || candidate.schedules.dex8h.enabled;
       if (candidate.enabled && hasDexAlertSchedule && !candidate.assets.dex.enabled) return json(res, 400, { error: "Cần bật watchlist DEX trước khi bật lịch DEX 4H/8H" });
       if (candidate.enabled && hasDexAlertSchedule) {
@@ -520,7 +601,8 @@ const server = http.createServer(async (req, res) => {
       }
       const newCoins = await loadNewCoinList(newCoinPath);
       const hasNewCoins = candidate.schedules.newCoinScan.enabled && activeNewCoinItems(newCoins.items).length;
-      if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins) return json(res, 400, { error: "Cần bật ít nhất một watchlist CEX, DEX hoặc Coin mới có dữ liệu" });
+      if (candidate.enabled && candidate.schedules.metalsDaily.enabled && !candidate.assets.metals.enabled) return json(res, 400, { error: "Cần bật tài sản Vàng–Bạc trước khi bật lịch SELL D1" });
+      if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins && !hasMetals) return json(res, 400, { error: "Cần bật ít nhất một nhóm CEX, DEX, Coin mới hoặc Vàng–Bạc" });
       const settings = effectiveAutomation(await saveAutomation(automationPath, normalized));
       return json(res, 200, { settings, saved: true });
     }
@@ -542,6 +624,9 @@ const server = http.createServer(async (req, res) => {
       const request = await readJsonBody(req);
       const timeframe = request.timeframe === "8H" ? "8H" : "4H";
       return json(res, 200, await runDexAutomation(timeframe));
+    }
+    if (url.pathname === "/api/automation/metals/run" && req.method === "POST") {
+      return json(res, 200, await runMetalsAutomation("manual"));
     }
     if (url.pathname === "/api/focus" && req.method === "GET") {
       const data = await loadFocusList(focusPath, Date.now(), config.focus);
@@ -575,6 +660,43 @@ const server = http.createServer(async (req, res) => {
       } catch (error) {
         if (error.code === "NEW_COIN_EXISTS") return json(res, 409, { error: error.message });
         throw error;
+      }
+    }
+    if (url.pathname === "/api/metals/latest" && req.method === "GET") {
+      try {
+        const payload = await fetchMetalsLatest(metalsApi);
+        let comparison;
+        try { comparison = buildMetalComparison(payload); }
+        catch (error) { comparison = { error: error.message, rows: [] }; }
+        return json(res, 200, { ...payload, catalog: METAL_PRODUCTS, comparison });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "metals:latest", error: error.message }));
+        return json(res, 503, { error: "Không thể đọc Metals Data Collector; chi tiết đã được ghi vào log" });
+      }
+    }
+    if (url.pathname === "/api/chart/metals" && req.method === "GET") {
+      const timeframe = config.metals.timeframes.includes(url.searchParams.get("timeframe"))
+        ? url.searchParams.get("timeframe") : config.metals.defaultTimeframe;
+      const productCode = String(url.searchParams.get("product") || "VN_GOLD_SJC_BAR").toUpperCase();
+      const side = String(url.searchParams.get("side") || "").toUpperCase();
+      const requestedLimit = Number(url.searchParams.get("limit") || config.metals.chartCandles);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 100), 1000) : config.metals.chartCandles;
+      try {
+        const market = await fetchMetalCandles(productCode, side, limit, metalsApi);
+        const { meta } = market.selection;
+        const payload = chartPayload(market.candles, {
+          asset: market.selection.productCode, exchange: "METALS",
+          instrumentId: market.selection.productCode, quote: meta.currency
+        }, timeframe);
+        payload.market = {
+          ...payload.market, name: meta.name, market: meta.market,
+          currency: meta.currency, unit: meta.unit, side: market.selection.side
+        };
+        return json(res, 200, payload);
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "metals:chart", productCode, side, error: error.message }));
+        const invalid = /không hợp lệ/.test(error.message);
+        return json(res, invalid ? 400 : 503, { error: invalid ? error.message : "Không thể tải nến từ Metals Data Collector" });
       }
     }
     if (url.pathname === "/api/chart/cex" && req.method === "GET") {

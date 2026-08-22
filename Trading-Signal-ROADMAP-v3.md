@@ -2,8 +2,8 @@
 
 > Tài liệu roadmap chuẩn của dự án kể từ ngày 06/08/2026.  
 > Baseline rollback: **v2.9.2**.  
-> Bản production hiện tại: **v3.0.1**.  
-> Bản phát hành sẵn sàng triển khai: **v3.1.0**.
+> Bản production trước cập nhật: **v3.1.0**.  
+> Bản phát hành chính thức sẵn sàng triển khai: **v3.2.0**.
 
 ## 1. Nguyên tắc phát triển đã khóa
 
@@ -42,8 +42,8 @@
 | v2.9.2 | Sửa zoom và thao tác chart trên điện thoại | ✅ Đã nghiệm thu |
 | v3.0.0 | Coin mới + nến 8H, dùng lại SMC/EMA/Signal | ✅ Nền tảng đã nghiệm thu, chưa thay production |
 | v3.0.1 | Scheduler 8H + Telegram cho Coin mới | ✅ Đã triển khai production |
-| v3.1.0 | DEX `1H · 4H · 8H · D1`, chọn chain/pool | ✅ Hoàn thành, sẵn sàng triển khai |
-| v3.2.0 | Vàng–Bạc Việt Nam | ⏳ Chưa bắt đầu |
+| v3.1.0 | DEX `1H · 4H · 8H · D1`, chọn chain/pool | ✅ Đã triển khai production |
+| v3.2.0 | Vàng–Bạc Việt Nam | ✅ Hoàn thành, sẵn sàng triển khai production |
 
 ## 4. v2.9.2 — Mobile chart zoom
 
@@ -191,15 +191,24 @@
 
 ## 7. v3.2.0 — Vàng–Bạc Việt Nam
 
-- Tab **Vàng–Bạc**.
-- Sản phẩm đầu tiên: Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999.
-- Tách giá mua/bán; thu thập lịch sử và tổng hợp nến D1.
-- Chart D1 với EMA và Signal sau khi nguồn dữ liệu đủ ổn định.
+**Trạng thái: ✅ Hoàn thành và đóng bản chính thức ngày 22/08/2026**
+
+- [x] `dev.4`: Tab **Vàng–Bạc**, đọc duy nhất `metals-data-collector v0.3.1`.
+- [x] `dev.4`: Vàng miếng SJC, Nhẫn trơn 9999, Bạc 999, XAU/USD, XAG/USD và USD/VND.
+- [x] `dev.4`: Tách BUY/SELL cho Việt Nam; dùng MID cho dữ liệu thế giới.
+- [x] `dev.4`: Chart D1/W1 dùng chung EMA, Signal và SMC; hỗ trợ chọn Giá mua/Giá bán.
+- [x] `dev.4.1`: Điều hướng phân tầng và nến biến động cho lịch sử Việt Nam một mẫu/ngày.
+- [x] Nghiệm thu chart Việt Nam và OHLC thế giới trên VPS demo với dữ liệu mạng thực tế.
+- [x] `dev.5`: Quy đổi XAU/XAG theo USD/VND và tính premium/discount mua/bán cho ba sản phẩm Việt Nam.
+- [x] Nghiệm thu tab So sánh `dev.5` trên VPS demo.
+- [x] `dev.6`: Cảnh báo D1 cho ba sản phẩm Việt Nam, chỉ `SELL`, nến đã đóng; có chạy tay, scheduler, Telegram gộp và chống trùng.
+- [x] Nghiệm thu chạy tay và một mốc scheduler `dev.6` trên VPS demo.
+- [x] Đóng bản chính thức `v3.2.0`; 134/134 test và kiểm tra cú pháp đạt.
 
 ## 8. Bước thực hiện ngay
 
-1. Push bản `v3.1.0` lên GitHub theo nhánh phát hành đã thống nhất.
-2. Pull về VPS, giữ nguyên `.env` và `DATA_DIR` ngoài source.
-3. Chạy `npm test`, `npm run check`, reload PM2 và kiểm tra `/api/health` trả `3.1.0`.
-4. Sau triển khai, xác nhận một bản tin gộp tại mốc có nhiều nhóm tự động cùng chạy.
-5. Bắt đầu thiết kế `v3.2.0` — Vàng–Bạc Việt Nam.
+1. Chép source `v3.2.0` vào repository Git trên Mac, chạy test/check rồi commit và gắn tag `v3.2.0`.
+2. Push commit cùng tag lên GitHub.
+3. Trên VPS production, kiểm tra worktree sạch rồi `git pull --ff-only`; giữ nguyên `.env` và `DATA_DIR` ngoài source.
+4. Chạy `npm test`, `npm run check`, reload PM2 và kiểm tra `/api/health` trả `3.2.0`.
+5. Đăng nhập giao diện, kiểm tra Metals Collector và bật lịch Vàng–Bạc D1 khi sẵn sàng.

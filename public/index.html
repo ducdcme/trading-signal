@@ -6,14 +6,24 @@
 </head>
 <body>
   <main>
-    <header><div><p class="eyebrow">MULTI-ASSET SIGNAL SCANNER</p><h1>Trading Signal</h1><p>CEX, DEX và chứng khoán Việt Nam trên cùng một công cụ.</p></div><div class="header-actions"><span class="live">Closed candles only</span><button id="logout" class="secondary" type="button">Đăng xuất</button></div></header>
-    <nav class="tabs" aria-label="Loại tài sản">
-      <button class="tab active" data-tab="cex">CEX Crypto</button>
+    <header><div><p class="eyebrow">MULTI-ASSET SIGNAL SCANNER</p><h1>Trading Signal</h1><p>Crypto, Vàng–Bạc và Chứng khoán Việt Nam trên cùng một công cụ.</p></div><div class="header-actions"><span class="live">Closed candles only</span><button id="logout" class="secondary" type="button">Đăng xuất</button></div></header>
+    <nav class="market-tabs" aria-label="Thị trường">
+      <button class="market-tab active" data-market="crypto">Crypto</button>
+      <button class="market-tab" data-market="metals">Vàng &amp; Bạc</button>
+      <button class="market-tab" data-market="stocks">Chứng khoán Việt Nam</button>
+      <button class="market-tab" data-market="automation">Tự động &amp; Telegram</button>
+    </nav>
+    <nav class="tabs subtabs active" data-market="crypto" aria-label="Chức năng Crypto">
+      <button class="tab active" data-tab="cex">Quét CEX</button>
       <button class="tab" data-tab="new-coins">Coin mới</button>
       <button class="tab" data-tab="focus">Theo dõi 7 ngày</button>
-      <button class="tab" data-tab="dex">DEX Crypto</button>
-      <button class="tab" data-tab="stocks">VN Stocks</button>
-      <button class="tab" data-tab="automation">Tự động & Telegram</button>
+      <button class="tab" data-tab="dex">DEX</button>
+    </nav>
+    <nav class="tabs subtabs" data-market="metals" aria-label="Chức năng Vàng và Bạc" hidden>
+      <button class="tab" data-tab="metals-overview">Tổng quan</button>
+      <button class="tab" data-tab="metals-vietnam">Việt Nam</button>
+      <button class="tab" data-tab="metals-world">Thế giới</button>
+      <button class="tab" data-tab="metals-compare">So sánh</button>
     </nav>
 
     <section class="tab-panel active" id="panel-cex">
@@ -73,6 +83,53 @@
       <p class="note">Mỗi lượt tối đa <span id="dexMaxTokens">10</span> token. DEX hỗ trợ mọi quote token mà nguồn dữ liệu trả về. Mỗi token dùng đúng pool bạn chọn; không nối nến từ nhiều pool.</p>
     </section>
 
+    <section class="tab-panel" id="panel-metals-overview">
+      <section class="controls metals-controls">
+        <div class="section-heading"><div><p class="eyebrow">VIET NAM · GLOBAL REFERENCE</p><h2>Tổng quan Vàng &amp; Bạc</h2><p>Giá Việt Nam là trọng tâm; XAU/USD, XAG/USD và USD/VND dùng làm dữ liệu tham chiếu thế giới.</p></div><button class="reload-metals" type="button">Tải lại dữ liệu</button></div>
+        <div class="metal-state" data-metals-state>Đang chờ tải dữ liệu…</div>
+      </section>
+      <section class="table-wrap metals-table"><table><thead><tr><th>Sản phẩm</th><th>Giá mua</th><th>Giá bán / MID</th><th>Spread</th><th>Nguồn / Cập nhật</th><th>Biểu đồ</th></tr></thead><tbody data-metals-results="ALL"></tbody></table></section>
+      <p class="note">Giá vàng Việt Nam tính theo VND/lượng; bạc 999 tính theo VND/kg. XAU/XAG tính theo USD/troy ounce; USD/VND dùng làm tỷ giá quy đổi. Biểu đồ hỗ trợ D1 và W1.</p>
+    </section>
+
+    <section class="tab-panel" id="panel-metals-vietnam">
+      <section class="controls metals-controls">
+        <div class="section-heading"><div><p class="eyebrow">DOMESTIC MARKET</p><h2>Vàng &amp; Bạc Việt Nam</h2><p>Theo dõi riêng giá mua, giá bán và spread từ Metals Data Collector.</p></div><button class="reload-metals" type="button">Tải lại dữ liệu</button></div>
+        <div class="metal-state" data-metals-state>Đang chờ tải dữ liệu…</div>
+      </section>
+      <section class="table-wrap metals-table"><table><thead><tr><th>Sản phẩm</th><th>Giá mua</th><th>Giá bán</th><th>Spread</th><th>Nguồn / Cập nhật</th><th>Biểu đồ</th></tr></thead><tbody data-metals-results="VIETNAM"></tbody></table></section>
+      <p class="note">Vàng tính theo VND/lượng; bạc 999 tính theo VND/kg. Biểu đồ cho phép chuyển riêng Giá mua và Giá bán.</p>
+    </section>
+
+    <section class="tab-panel" id="panel-metals-world">
+      <section class="controls metals-controls">
+        <div class="section-heading"><div><p class="eyebrow">GLOBAL MARKET</p><h2>Vàng &amp; Bạc thế giới</h2><p>XAU/USD, XAG/USD và USD/VND được thu thập, lưu lịch sử và phục vụ biểu đồ từ Metals Data Collector.</p></div><button class="reload-metals" type="button">Tải lại dữ liệu</button></div>
+        <div class="metal-state" data-metals-state>Đang chờ tải dữ liệu…</div>
+      </section>
+      <section class="table-wrap metals-table"><table><thead><tr><th>Mã tham chiếu</th><th>Giá mua</th><th>Giá MID</th><th>Spread</th><th>Nguồn / Cập nhật</th><th>Biểu đồ</th></tr></thead><tbody data-metals-results="WORLD"></tbody></table></section>
+      <p class="note">Trading Signal chỉ đọc API nội bộ; không gọi trực tiếp Alpha Vantage, Twelve Data hoặc nguồn giá bên ngoài.</p>
+    </section>
+
+    <section class="tab-panel" id="panel-metals-compare">
+      <section class="controls metals-controls">
+        <div class="section-heading"><div><p class="eyebrow">DOMESTIC PREMIUM</p><h2>So sánh Việt Nam – Thế giới</h2><p>Quy đổi giá kim loại thế giới sang đúng đơn vị trong nước rồi tính premium hoặc discount cho từng chiều mua/bán.</p></div><button class="reload-metals" type="button">Tải lại dữ liệu</button></div>
+        <div class="metal-state" data-metals-comparison-state>Đang chờ tải dữ liệu…</div>
+        <div class="metal-benchmark-grid">
+          <article><span>XAU/USD</span><strong data-metal-benchmark="xauUsd">—</strong><small>USD/troy ounce</small></article>
+          <article><span>USD/VND</span><strong data-metal-benchmark="usdVnd">—</strong><small>VND/USD</small></article>
+          <article><span>Vàng thế giới quy đổi</span><strong data-metal-benchmark="goldVndPerLuong">—</strong><small>VND/lượng</small></article>
+          <article><span>XAG/USD</span><strong data-metal-benchmark="xagUsd">—</strong><small>USD/troy ounce</small></article>
+          <article><span>Bạc thế giới quy đổi</span><strong data-metal-benchmark="silverVndPerKg">—</strong><small>VND/kg</small></article>
+        </div>
+      </section>
+      <section class="table-wrap metals-table metals-comparison-table"><table><thead><tr><th>Sản phẩm</th><th>Giá mua VN</th><th>Chênh lệch mua</th><th>Giá bán VN</th><th>Chênh lệch bán</th><th>Giá thế giới quy đổi</th><th>Cập nhật</th></tr></thead><tbody data-metals-comparison-results></tbody></table></section>
+      <div class="metal-formulas">
+        <div class="formula-card">Vàng VND/lượng = XAU/USD × USD/VND × 37,5 / 31,1034768</div>
+        <div class="formula-card">Bạc VND/kg = XAG/USD × USD/VND × 1.000 / 31,1034768</div>
+      </div>
+      <p class="note">Premium dương nghĩa là giá trong nước cao hơn giá thế giới quy đổi; discount âm nghĩa là thấp hơn. Kết quả chưa bao gồm thuế, phí, gia công và chênh lệch thương hiệu.</p>
+    </section>
+
     <section class="tab-panel" id="panel-stocks">
       <section class="controls coming-soon">
         <p class="eyebrow">SSI FASTCONNECT DATA</p><h2>Chứng khoán Việt Nam</h2>
@@ -102,6 +159,7 @@
             <label class="check-row"><input id="automationEnabled" type="checkbox"> Bật chạy tự động</label>
             <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><div class="schedule-fields"><input id="dailyTime" type="time"></div><span class="schedule-note">mỗi ngày</span></div>
             <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><div class="schedule-fields weekly-fields"><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div><span class="schedule-note">mỗi tuần</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="metalsDailyEnabled" type="checkbox"> Vàng–Bạc D1</label><div class="schedule-fields"><input id="metalsDailyTime" type="time"></div><span class="schedule-note">SELL · 3 sản phẩm VN</span></div>
             <div class="schedule-row"><strong>Khung nhỏ</strong><div class="schedule-fields minute-fields"><input id="closedCandleMinute" type="number" min="0" max="59"><span>phút</span></div><span class="schedule-note">sau giờ đóng nến</span></div>
             <div class="schedule-groups">
               <label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> Theo dõi <span class="focus-timeframes-label">4H/8H</span></label>
@@ -126,12 +184,13 @@
               <textarea id="autoDexTokens" rows="5" spellcheck="false" placeholder="base:0x…:0xpool…&#10;solana:token…:pool…"></textarea>
             </div>
           </div>
+          <div class="future-asset active-asset"><strong>VÀNG &amp; BẠC · SELL D1</strong><span>Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999; danh sách cố định, không quét BUY/XAU/XAG/USDVND.</span></div>
           <div class="future-asset"><strong>STOCK · SSI</strong><span>Đã có schema watchlist và lịch riêng; adapter dữ liệu chưa bật.</span></div>
           <p id="autoFileState" class="file-state"></p>
         </fieldset>
 
         <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi thống kê lượt quét khi không có tín hiệu mới</label><small>Các nhóm trùng thời điểm được gộp trong một bản tin; chi tiết lỗi chỉ ghi log.</small></div>
-        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runDex4hNow">Chạy DEX 4H</button><button class="secondary" id="runDex8hNow">Chạy DEX 8H</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
+        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runMetalsDailyNow">Chạy Vàng–Bạc SELL D1</button><button class="secondary" id="runDex4hNow">Chạy DEX 4H</button><button class="secondary" id="runDex8hNow">Chạy DEX 8H</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
         <div id="lastRuns" class="last-runs"></div>
       </section>
     </section>

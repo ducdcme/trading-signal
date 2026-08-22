@@ -16,7 +16,7 @@ test("migrates version 1 automation settings to the multi-asset schema", () => {
     cexSymbols: ["BTC", "BTC", "ETH"],
     dexTokens: [{ network: "BASE", tokenAddress: "0xabc" }]
   });
-  assert.equal(settings.schemaVersion, 6);
+  assert.equal(settings.schemaVersion, 7);
   assert.equal(settings.telegram.chatId, "-100123");
   assert.deepEqual(settings.assets.cex.watchlist, ["BTC", "ETH"]);
   assert.equal(settings.assets.dex.watchlist[0].network, "base");
@@ -28,6 +28,22 @@ test("migrates version 1 automation settings to the multi-asset schema", () => {
   assert.deepEqual(settings.schedules.newCoinScan, { enabled: true });
   assert.deepEqual(settings.schedules.dex4h, { enabled: false });
   assert.deepEqual(settings.schedules.dex8h, { enabled: false });
+  assert.deepEqual(settings.assets.metals, {
+    enabled: true,
+    products: ["VN_GOLD_SJC_BAR", "VN_GOLD_RING_9999", "VN_SILVER_999_KG"],
+    side: "SELL"
+  });
+  assert.deepEqual(settings.schedules.metalsDaily, { enabled: false, time: "07:10" });
+});
+
+test("metals automation is fixed to three domestic SELL products", () => {
+  const settings = normalizeAutomation({
+    assets: { metals: { enabled: true, products: ["XAU_USD"], side: "BUY" } },
+    schedules: { metalsDaily: { enabled: true, time: "09:05" } }
+  });
+  assert.deepEqual(settings.assets.metals.products, ["VN_GOLD_SJC_BAR", "VN_GOLD_RING_9999", "VN_SILVER_999_KG"]);
+  assert.equal(settings.assets.metals.side, "SELL");
+  assert.deepEqual(settings.schedules.metalsDaily, { enabled: true, time: "09:05" });
 });
 
 test("keeps stock placeholders and independent schedules in version 2", () => {
@@ -89,6 +105,13 @@ test("DEX signal deduplication includes the pinned pool address", () => {
   assert.notEqual(signalKey({ ...base, poolAddress: "0xpool1" }, "4H"), signalKey({ ...base, poolAddress: "0xpool2" }, "4H"));
 });
 
+test("metals signal deduplication includes SELL without changing legacy CEX keys", () => {
+  const cex = { assetType: "CEX", exchange: "BINANCE", instrumentId: "BTCUSDT", candleOpenTime: 1, status: "BUY", buySignalTypes: ["B"] };
+  assert.equal(signalKey(cex, "1D"), "CEX|BINANCE|BTCUSDT||||1D|1|BUY|B");
+  const metal = { assetType: "METALS", exchange: "METALS_DATA_COLLECTOR", instrumentId: "VN_GOLD_SJC_BAR", side: "SELL", candleOpenTime: 1, status: "BUY", buySignalTypes: ["B"] };
+  assert.match(signalKey(metal, "1D"), /VN_GOLD_SJC_BAR\|\|\|\|SELL\|1D/);
+});
+
 test("DEX Telegram report identifies timeframe, contract and pinned pool without exposing error details", () => {
   const row = {
     assetType: "DEX", exchange: "GECKOTERMINAL", instrumentId: "TOKEN", network: "base", dex: "aerodrome",
@@ -102,6 +125,19 @@ test("DEX Telegram report identifies timeframe, contract and pinned pool without
   assert.match(report, /Pool: TOKEN \/ WETH/);
   assert.match(report, /Loại lỗi: Lỗi mạng: 1/);
   assert.doesNotMatch(report, /private upstream detail/);
+});
+
+test("metals Telegram report uses domestic name, SELL side and formatted VND close", () => {
+  const row = {
+    assetType: "METALS", exchange: "METALS_DATA_COLLECTOR", instrumentId: "VN_GOLD_SJC_BAR",
+    productName: "Vàng miếng SJC", side: "SELL", close: 147600000,
+    status: "BUY", buySignalTypes: ["B"]
+  };
+  const report = formatAutomationReport("1D", [row], { delivered: [row], suppressed: 0 }, { timezone: "Asia/Ho_Chi_Minh", telegram: { sendNoSignalSummary: true } }, "manual", "VÀNG & BẠC SELL");
+  assert.match(report, /VÀNG & BẠC SELL · 1D/);
+  assert.match(report, /Vàng miếng SJC · SELL · Việt Nam/);
+  assert.match(report, /Giá bán đóng: 147\.600\.000 ₫/);
+  assert.doesNotMatch(report, /XAU|XAG|USD\/VND/);
 });
 
 test("scheduled summaries omit the no-signal sentence and can be combined into one Telegram report", () => {

@@ -1,5 +1,5 @@
 import { parseSymbols } from "./symbols.js";
-import { initialAppTab, normalizeAppTab, shouldRestoreScanCache } from "./navigation-state.js";
+import { defaultTabForMarket, initialAppTab, marketForTab, normalizeAppTab, shouldRestoreScanCache } from "./navigation-state.js";
 import { scanDexTokensSequentially } from "./dex-scan.js";
 
 const $ = selector => document.querySelector(selector);
@@ -10,6 +10,7 @@ const shortAddress = value => value?.length > 18 ? `${value.slice(0, 8)}…${val
 const signalTypes = row => [...(row.buyTypes ?? []), ...(row.sellTypes ?? []), ...(row.warnings ?? []), ...(row.exitTypes ?? []), ...(row.trendTypes ?? [])];
 const chartUrl = (exchange, symbol, timeframe = "1D", returnTab = "cex") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab: normalizeAppTab(returnTab) })}`;
 const dexChartUrl = row => `/chart.html?${new URLSearchParams({ mode: "DEX", network: row.network, tokenAddress: row.tokenAddress, poolAddress: row.poolAddress, symbol: row.instrumentId, timeframe: row.timeframe, returnTab: "dex" })}`;
+const metalsChartUrl = (product, side, returnTab = "metals-overview") => `/chart.html?${new URLSearchParams({ mode: "METALS", product, side, timeframe: "1D", returnTab: normalizeAppTab(returnTab) })}`;
 const scanCacheKeys = { cex: "trading-signal:cex-scan:v1", dex: "trading-signal:dex-scan:v1" };
 const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
 const activeTabKey = "trading-signal:active-tab:v1";
@@ -52,12 +53,20 @@ function readActiveTab() {
 
 function activateTab(value, updateUrl = false) {
   const tabName = normalizeAppTab(value);
+  const marketName = marketForTab(tabName);
+  document.querySelectorAll(".market-tab").forEach(tab => tab.classList.toggle("active", tab.dataset.market === marketName));
+  document.querySelectorAll(".subtabs").forEach(nav => {
+    const active = nav.dataset.market === marketName;
+    nav.classList.toggle("active", active);
+    nav.hidden = !active;
+  });
   document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.tab === tabName));
   document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === `panel-${tabName}`));
   try { sessionStorage.setItem(activeTabKey, tabName); } catch { /* URL hash vẫn giữ được tab. */ }
   if (updateUrl) history.replaceState(history.state, "", `${location.pathname}${location.search}#${tabName}`);
 }
 
+document.querySelectorAll(".market-tab").forEach(button => button.addEventListener("click", () => activateTab(defaultTabForMarket(button.dataset.market), true)));
 document.querySelectorAll(".tab").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.tab, true)));
 activateTab(initialAppTab(location.hash, readActiveTab()), !location.hash);
 
@@ -89,6 +98,126 @@ $("#dexTimeframe").innerHTML = dexTimeframes.map(value => `<option value="${h(va
 $("#dexTimeframe").value = dexTimeframes.includes(config.dex?.defaultTimeframe) ? config.dex.defaultTimeframe : dexTimeframes[0];
 $("#dexNetwork").innerHTML = dexNetworks.map(value => `<option value="${h(value)}">${h(dexNetworkLabels[value] || value)}</option>`).join("");
 $("#dexMaxTokens").textContent = String(config.dex?.maxTokensPerScan || 10);
+
+const metalOrder = ["VN_GOLD_SJC_BAR", "VN_GOLD_RING_9999", "VN_SILVER_999_KG", "XAU_USD", "XAG_USD", "USD_VND"];
+let metalsPayload = null;
+
+function formatMetalPrice(value, currency) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const digits = currency === "VND" ? 0 : number >= 100 ? 2 : 4;
+  return `${number.toLocaleString("vi-VN", { maximumFractionDigits: digits })} ${currency || ""}`.trim();
+}
+
+function formatMetalUpdated(timestamp) {
+  const number = Number(timestamp);
+  return Number.isFinite(number) ? new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh", hour: "2-digit", minute: "2-digit",
+    day: "2-digit", month: "2-digit", year: "2-digit"
+  }).format(number) : "—";
+}
+
+function renderMetalsTable(target, market) {
+  if (!metalsPayload) return;
+  const catalog = metalsPayload.catalog || {};
+  const byProduct = new Map((metalsPayload.products || []).map(item => [item.productId, item]));
+  const rows = metalOrder.filter(code => market === "ALL" || catalog[code]?.market === market);
+  target.innerHTML = rows.map(code => {
+    const meta = catalog[code] || {};
+    const item = byProduct.get(code);
+    if (!item) return `<tr><td><strong>${h(meta.name || code)}</strong><small>${h(code)}</small></td><td colspan="5"><span class="badge error">Chưa có dữ liệu</span></td></tr>`;
+    const buy = item.buy;
+    const sell = item.sell ?? item.price ?? item.close;
+    const spread = Number.isFinite(Number(item.spread)) ? formatMetalPrice(item.spread, meta.currency) : "—";
+    const freshness = item.freshness?.status === "FRESH" ? "Mới" : "Cũ";
+    const freshnessClass = item.freshness?.status === "FRESH" ? "running" : "paused";
+    const returnTab = market === "VIETNAM" ? "metals-vietnam" : market === "WORLD" ? "metals-world" : "metals-overview";
+    const charts = meta.market === "WORLD"
+      ? `<a class="chart-link" href="${h(metalsChartUrl(code, "MID", returnTab))}">Mở D1</a>`
+      : `<a class="chart-link" href="${h(metalsChartUrl(code, "BUY", returnTab))}">Mua</a><span class="metal-chart-separator">·</span><a class="chart-link" href="${h(metalsChartUrl(code, "SELL", returnTab))}">Bán</a>`;
+    return `<tr><td><strong>${h(meta.name || code)}</strong><small>${h(code)} · ${h(meta.unit || item.unit || "")}</small></td><td>${h(formatMetalPrice(buy, meta.currency))}</td><td><strong>${h(formatMetalPrice(sell, meta.currency))}</strong></td><td>${h(spread)}</td><td>${h(item.provider || "—")}<small>${h(formatMetalUpdated(item.sourceUpdatedAt))} · <span class="badge ${freshnessClass}">${freshness}</span></small></td><td>${charts}</td></tr>`;
+  }).join("");
+}
+
+function comparisonTone(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || Math.abs(number) < 0.000001) return "neutral";
+  return number > 0 ? "premium" : "discount";
+}
+
+function formatComparison(side) {
+  if (!side || !Number.isFinite(Number(side.difference)) || !Number.isFinite(Number(side.percent))) return "—";
+  const difference = Number(side.difference);
+  const percent = Number(side.percent);
+  const sign = difference > 0 ? "+" : "";
+  const percentSign = percent > 0 ? "+" : "";
+  const label = difference > 0 ? "Premium" : difference < 0 ? "Discount" : "Ngang giá";
+  return `<span class="metal-comparison-value ${comparisonTone(difference)}">${h(`${sign}${Math.round(difference).toLocaleString("vi-VN")} ₫`)}<small>${h(`${label} · ${percentSign}${percent.toLocaleString("vi-VN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`)}</small></span>`;
+}
+
+function renderMetalComparison() {
+  const comparison = metalsPayload?.comparison;
+  const state = document.querySelector("[data-metals-comparison-state]");
+  const target = document.querySelector("[data-metals-comparison-results]");
+  if (!state || !target) return;
+  if (!comparison || comparison.error) {
+    state.textContent = comparison?.error || "Chưa có dữ liệu quy đổi.";
+    target.innerHTML = '<tr><td colspan="7">Không đủ dữ liệu XAU/USD, XAG/USD và USD/VND để so sánh.</td></tr>';
+    return;
+  }
+
+  const benchmarkValues = {
+    xauUsd: formatMetalPrice(comparison.inputs.xauUsd, "USD"),
+    xagUsd: formatMetalPrice(comparison.inputs.xagUsd, "USD"),
+    usdVnd: formatMetalPrice(comparison.inputs.usdVnd, "VND"),
+    goldVndPerLuong: formatMetalPrice(comparison.benchmarks.goldVndPerLuong, "VND"),
+    silverVndPerKg: formatMetalPrice(comparison.benchmarks.silverVndPerKg, "VND")
+  };
+  document.querySelectorAll("[data-metal-benchmark]").forEach(element => {
+    element.textContent = benchmarkValues[element.dataset.metalBenchmark] || "—";
+  });
+
+  const catalog = metalsPayload.catalog || {};
+  target.innerHTML = comparison.rows.map(row => {
+    const meta = catalog[row.productId] || {};
+    if (row.missing) return `<tr><td><strong>${h(meta.name || row.productId)}</strong><small>${h(row.productId)}</small></td><td colspan="6"><span class="badge error">Chưa có dữ liệu</span></td></tr>`;
+    return `<tr><td><strong>${h(meta.name || row.productId)}</strong><small>${h(row.productId)} · ${h(meta.unit || "")}</small></td><td>${h(formatMetalPrice(row.buy?.price, "VND"))}</td><td>${formatComparison(row.buy)}</td><td><strong>${h(formatMetalPrice(row.sell?.price, "VND"))}</strong></td><td>${formatComparison(row.sell)}</td><td><strong>${h(formatMetalPrice(row.benchmark, "VND"))}</strong><small>${h(row.referenceProductId)}</small></td><td>${h(row.provider || "—")}<small>${h(formatMetalUpdated(row.sourceUpdatedAt))}</small></td></tr>`;
+  }).join("");
+  state.textContent = `Đã quy đổi theo dữ liệu mới nhất · ${formatMetalUpdated(comparison.generatedAt)}`;
+}
+
+function renderMetals() {
+  document.querySelectorAll("[data-metals-results]").forEach(target => renderMetalsTable(target, target.dataset.metalsResults));
+  document.querySelectorAll("[data-metals-state]").forEach(target => {
+    target.textContent = `Đã đọc ${metalOrder.length} sản phẩm · ${formatMetalUpdated(metalsPayload.generatedAt)}`;
+  });
+  renderMetalComparison();
+}
+
+async function loadMetals() {
+  const buttons = [...document.querySelectorAll(".reload-metals")];
+  buttons.forEach(button => { button.disabled = true; });
+  document.querySelectorAll("[data-metals-state]").forEach(target => { target.textContent = "Đang đọc Metals Data Collector…"; });
+  try {
+    const response = await fetch("/api/metals/latest");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    metalsPayload = data;
+    renderMetals();
+  } catch (error) {
+    document.querySelectorAll("[data-metals-state]").forEach(target => { target.textContent = `Lỗi: ${error.message}`; });
+    document.querySelectorAll("[data-metals-results]").forEach(target => { target.innerHTML = '<tr><td colspan="6">Không tải được dữ liệu Vàng &amp; Bạc.</td></tr>'; });
+    const comparisonState = document.querySelector("[data-metals-comparison-state]");
+    const comparisonTarget = document.querySelector("[data-metals-comparison-results]");
+    if (comparisonState) comparisonState.textContent = `Lỗi: ${error.message}`;
+    if (comparisonTarget) comparisonTarget.innerHTML = '<tr><td colspan="7">Không tải được dữ liệu so sánh.</td></tr>';
+  } finally { buttons.forEach(button => { button.disabled = false; }); }
+}
+
+document.querySelectorAll(".reload-metals").forEach(button => button.addEventListener("click", loadMetals));
+document.querySelector('[data-market="metals"]').addEventListener("click", () => { if (!metalsPayload) loadMetals(); });
+document.querySelectorAll('[data-tab^="metals-"]').forEach(button => button.addEventListener("click", () => { if (!metalsPayload) loadMetals(); }));
+if (marketForTab(initialAppTab(location.hash, readActiveTab())) === "metals") loadMetals();
 
 let automationSnapshot = await fetch("/api/automation").then(response => response.json());
 
@@ -300,8 +429,8 @@ if (cachedDex?.data?.results?.length) {
 }
 
 function renderLastRuns(lastRuns = {}) {
-  const rows = ["crypto:1D", "crypto:1W", "dex:4H", "dex:8H", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
-    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : key.startsWith("dex:") ? `DEX ${run.timeframe || key.slice(4)}` : (run.timeframe || key.slice(7));
+  const rows = ["crypto:1D", "crypto:1W", "metals:1D", "dex:4H", "dex:8H", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
+    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : key === "metals:1D" ? "Vàng–Bạc SELL D1" : key.startsWith("dex:") ? `DEX ${run.timeframe || key.slice(4)}` : (run.timeframe || key.slice(7));
     const detail = run.status === "ERROR" ? `Lỗi: ${run.error}` : `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
@@ -317,6 +446,8 @@ function fillAutomation(data) {
   $("#weeklyEnabled").checked = settings.schedules.cryptoWeekly.enabled;
   $("#weeklyDay").value = String(settings.schedules.cryptoWeekly.day);
   $("#weeklyTime").value = settings.schedules.cryptoWeekly.time;
+  $("#metalsDailyEnabled").checked = settings.schedules.metalsDaily.enabled;
+  $("#metalsDailyTime").value = settings.schedules.metalsDaily.time;
   $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
   $("#closedCandleMinute").value = String(settings.schedules.closedCandle.minute);
   updateClosedCandleSchedulePreview();
@@ -336,7 +467,7 @@ function fillAutomation(data) {
 
 function collectAutomation() {
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     enabled: $("#automationEnabled").checked,
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
@@ -346,6 +477,7 @@ function collectAutomation() {
     assets: {
       cex: { enabled: $("#autoCexEnabled").checked, watchlist: parseSymbols($("#autoCexSymbols").value) },
       dex: { enabled: $("#autoDexEnabled").checked, watchlist: parseDexTokens($("#autoDexTokens").value) },
+      metals: automationSnapshot.settings.assets.metals,
       stocks: automationSnapshot.settings.assets.stocks
     },
     schedules: {
@@ -356,6 +488,7 @@ function collectAutomation() {
       newCoinScan: { enabled: $("#newCoinScheduleEnabled").checked },
       dex4h: { enabled: $("#dex4hScheduleEnabled").checked },
       dex8h: { enabled: $("#dex8hScheduleEnabled").checked },
+      metalsDaily: { enabled: $("#metalsDailyEnabled").checked, time: $("#metalsDailyTime").value },
       stockDaily: automationSnapshot.settings.schedules.stockDaily,
       stockWeekly: automationSnapshot.settings.schedules.stockWeekly
     }
@@ -539,6 +672,17 @@ async function runNow(timeframe, button) {
 
 $("#runDailyNow").addEventListener("click", event => runNow("1D", event.currentTarget));
 $("#runWeeklyNow").addEventListener("click", event => runNow("1W", event.currentTarget));
+async function runMetalsNow(button) {
+  button.disabled = true; $("#automationState").textContent = "Đang quét 3 sản phẩm Vàng–Bạc SELL D1 và gửi Telegram…";
+  try {
+    await saveAutomationSettings(false);
+    const result = await api("/api/automation/metals/run", { method: "POST" });
+    $("#automationState").textContent = `Vàng–Bạc SELL D1: đã quét ${result.total} sản phẩm, gửi ${result.sentSignals} tín hiệu, ${result.errors} lỗi.`;
+    automationSnapshot = await api("/api/automation"); renderLastRuns(automationSnapshot.state.lastRuns);
+  } catch (error) { $("#automationState").textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+$("#runMetalsDailyNow").addEventListener("click", event => runMetalsNow(event.currentTarget));
 async function runDexNow(timeframe, button) {
   button.disabled = true; $("#automationState").textContent = `Đang quét DEX ${timeframe} và gửi Telegram…`;
   try {

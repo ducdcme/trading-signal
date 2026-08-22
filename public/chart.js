@@ -16,12 +16,25 @@ const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
 const chartMode = String(params.get("mode") || "CEX").toUpperCase();
 const isDexChart = chartMode === "DEX";
+const isMetalsChart = chartMode === "METALS";
+const metalItems = [
+  { product: "VN_GOLD_SJC_BAR", name: "Vàng miếng SJC", market: "VIETNAM", currency: "VND", unit: "lượng" },
+  { product: "VN_GOLD_RING_9999", name: "Nhẫn trơn 9999", market: "VIETNAM", currency: "VND", unit: "lượng" },
+  { product: "VN_SILVER_999_KG", name: "Bạc 999", market: "VIETNAM", currency: "VND", unit: "kg" },
+  { product: "XAU_USD", name: "Vàng thế giới", market: "WORLD", currency: "USD", unit: "troy oz" },
+  { product: "XAG_USD", name: "Bạc thế giới", market: "WORLD", currency: "USD", unit: "troy oz" },
+  { product: "USD_VND", name: "Tỷ giá USD/VND", market: "WORLD", currency: "VND", unit: "USD" }
+];
+let metalProduct = String(params.get("product") || "VN_GOLD_SJC_BAR").toUpperCase();
+if (!metalItems.some(item => item.product === metalProduct)) metalProduct = "VN_GOLD_SJC_BAR";
+let metalSide = String(params.get("side") || (metalItems.find(item => item.product === metalProduct)?.market === "WORLD" ? "MID" : "SELL")).toUpperCase();
 let exchange = String(params.get("exchange") || "AUTO").toUpperCase();
-let symbol = String(params.get("symbol") || "BTC").toUpperCase();
+let symbol = isMetalsChart ? metalProduct : String(params.get("symbol") || "BTC").toUpperCase();
 let dexNetwork = String(params.get("network") || "").toLowerCase();
 let dexTokenAddress = String(params.get("tokenAddress") || "");
 let dexPoolAddress = String(params.get("poolAddress") || "");
 let timeframe = ["1H", "4H", "8H", "1D", "1W"].includes(params.get("timeframe")) ? params.get("timeframe") : "1D";
+if (isMetalsChart && !["1D", "1W"].includes(timeframe)) timeframe = "1D";
 const returnTab = normalizeAppTab(params.get("returnTab"));
 let payload = null;
 let layout = null;
@@ -103,6 +116,10 @@ function normalizeChartItem(item) {
 }
 
 function readChartWorkspace() {
+  if (isMetalsChart) {
+    chartItems = [];
+    return;
+  }
   if (isDexChart) {
     chartItems = [];
     let cached = null;
@@ -124,7 +141,7 @@ function readChartWorkspace() {
 }
 
 function saveChartWorkspace() {
-  if (isDexChart) return;
+  if (isDexChart || isMetalsChart) return;
   try {
     localStorage.setItem(chartWorkspaceKey, JSON.stringify({ selected: `${exchange}:${symbol}`, timeframe, items: chartItems }));
   } catch { /* danh sách vẫn hoạt động trong phiên hiện tại */ }
@@ -144,6 +161,19 @@ function formatQuotePrice(value) {
 }
 
 function renderChartList() {
+  if (isMetalsChart) {
+    $("#chartListCount").textContent = String(metalItems.length);
+    $("#chartCoinList").innerHTML = metalItems.map(item => {
+      const quote = quotesByKey.get(item.product);
+      const value = item.market === "WORLD"
+        ? (quote?.price ?? quote?.close)
+        : (metalSide === "BUY" ? quote?.buy : quote?.sell);
+      const selected = item.product === metalProduct;
+      const sideLabel = item.market === "WORLD" ? "MID" : metalSide;
+      return `<button class="chart-coin-row${selected ? " selected" : ""}" type="button" data-metal-product="${h(item.product)}"><span class="chart-pair"><strong>${h(item.name)}</strong><small>${h(item.product)}</small></span><span class="chart-quote-price">${h(formatQuotePrice(value))}</span><span class="chart-change unavailable">${h(sideLabel)}</span></button>`;
+    }).join("");
+    return;
+  }
   if (isDexChart) {
     const selectedKey = dexItemKey({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress });
     $("#chartListCount").textContent = String(dexChartItems.length);
@@ -175,6 +205,24 @@ function renderChartList() {
 async function refreshQuotes({ announce = false } = {}) {
   clearTimeout(quoteTimer);
   if (isDexChart) return;
+  if (isMetalsChart) {
+    if (document.hidden) {
+      quoteTimer = setTimeout(() => refreshQuotes(), 60_000);
+      return;
+    }
+    try {
+      const response = await fetch("/api/metals/latest");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      quotesByKey = new Map((data.products || []).map(item => [item.productId, item]));
+      if (announce) $("#chartListState").textContent = "Giá mới nhất từ Metals Data Collector.";
+      renderChartList();
+    } catch (error) {
+      $("#chartListState").textContent = `Không cập nhật được giá: ${error.message}`;
+    }
+    quoteTimer = setTimeout(() => refreshQuotes(), 60_000);
+    return;
+  }
   if (!chartItems.length || document.hidden) {
     quoteTimer = setTimeout(() => refreshQuotes(), quoteRefreshMs);
     return;
@@ -211,6 +259,27 @@ function selectDexChartItem(item) {
   dexTokenAddress = item.tokenAddress;
   dexPoolAddress = item.poolAddress;
   symbol = item.symbol;
+  renderChartList();
+  load();
+}
+
+function updateMetalSideControl() {
+  if (!isMetalsChart) return;
+  const item = metalItems.find(candidate => candidate.product === metalProduct);
+  const select = $("#metalSide");
+  if (!select || !item) return;
+  const sides = item.market === "WORLD" ? ["MID"] : ["BUY", "SELL"];
+  if (!sides.includes(metalSide)) metalSide = sides.at(-1);
+  select.innerHTML = sides.map(side => `<option value="${side}">${side === "BUY" ? "Giá mua" : side === "SELL" ? "Giá bán" : "Giá MID"}</option>`).join("");
+  select.value = metalSide;
+  select.disabled = sides.length === 1;
+}
+
+function selectMetalChartItem(item) {
+  metalProduct = item.product;
+  symbol = item.product;
+  metalSide = item.market === "WORLD" ? "MID" : (metalSide === "BUY" ? "BUY" : "SELL");
+  updateMetalSideControl();
   renderChartList();
   load();
 }
@@ -639,12 +708,20 @@ async function load() {
   try {
     const query = isDexChart
       ? new URLSearchParams({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, timeframe })
-      : new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
-    const response = await fetch(`${isDexChart ? "/api/chart/dex" : "/api/chart/cex"}?${query}`); const data = await response.json();
+      : isMetalsChart
+        ? new URLSearchParams({ product: metalProduct, side: metalSide, timeframe, limit: "1000" })
+        : new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
+    const endpoint = isDexChart ? "/api/chart/dex" : isMetalsChart ? "/api/chart/metals" : "/api/chart/cex";
+    const response = await fetch(`${endpoint}?${query}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     if (sequence !== loadSequence) return;
     payload = data; smcLayers = buildSmcLayers(data.candles); $("#chartState").classList.add("hidden");
     exchange = data.market.exchange; symbol = data.market.instrumentId;
+    if (isMetalsChart) {
+      metalProduct = data.market.instrumentId;
+      metalSide = data.market.side;
+      updateMetalSideControl();
+    }
     if (isDexChart) dexPoolAddress = data.market.poolAddress;
     if (isDexChart) {
       const selected = dexChartItems.find(item => item.network === dexNetwork && item.tokenAddress.toLowerCase() === dexTokenAddress.toLowerCase() && (!item.poolAddress || item.poolAddress.toLowerCase() === dexPoolAddress.toLowerCase()));
@@ -652,23 +729,27 @@ async function load() {
         Object.assign(selected, { poolAddress: dexPoolAddress, symbol, dex: data.market.dex, liquidityUsd: data.market.liquidityUsd });
         saveDexChartWorkspace();
       }
-    } else {
+    } else if (!isMetalsChart) {
       const resolvedItem = { exchange, symbol };
       const requestedIndex = chartItems.findIndex(item => itemKey(item) === requestedKey);
       const resolvedIndex = chartItems.findIndex(item => itemKey(item) === itemKey(resolvedItem));
       if (requestedIndex >= 0 && resolvedIndex < 0) chartItems[requestedIndex] = resolvedItem;
       else if (requestedIndex >= 0 && resolvedIndex !== requestedIndex) chartItems.splice(requestedIndex, 1);
     }
-    $("#chartTitle").textContent = `${symbol} · ${timeframe}`;
+    $("#chartTitle").textContent = `${isMetalsChart ? data.market.name : symbol} · ${timeframe}${isMetalsChart ? ` · ${metalSide}` : ""}`;
     const liveBars = data.candles.filter(candle => !candle.isClosed).length;
     $("#chartMeta").textContent = isDexChart
       ? `${data.market.network} · ${data.market.dex} · $${Number(data.market.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`
-      : `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
+      : isMetalsChart
+        ? `${data.market.market === "VIETNAM" ? "Việt Nam" : "Thế giới"} · ${data.market.currency}/${data.market.unit} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`
+        : `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
     const nextParams = isDexChart
       ? { mode: "DEX", network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, symbol, timeframe, returnTab }
-      : { exchange, symbol, timeframe, returnTab };
+      : isMetalsChart
+        ? { mode: "METALS", product: metalProduct, side: metalSide, timeframe, returnTab }
+        : { exchange, symbol, timeframe, returnTab };
     history.replaceState(null, "", `/chart.html?${new URLSearchParams(nextParams)}`);
-    document.title = `${symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
+    document.title = `${isMetalsChart ? data.market.name : symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
   } catch (error) {
     if (sequence !== loadSequence) return;
     $("#chartState").className = "chart-state chart-error"; $("#chartState").textContent = `Không tải được biểu đồ: ${error.message}`;
@@ -808,6 +889,12 @@ $("#autoScale").addEventListener("click", resetYScale);
 $("#resetView").addEventListener("click", resetView);
 new ResizeObserver(draw).observe(canvas);
 $("#chartCoinList").addEventListener("click", event => {
+  if (isMetalsChart) {
+    const row = event.target.closest("[data-metal-product]");
+    const item = row && metalItems.find(candidate => candidate.product === row.dataset.metalProduct);
+    if (item && item.product !== metalProduct) selectMetalChartItem(item);
+    return;
+  }
   if (isDexChart) {
     const remove = event.target.closest("[data-dex-remove-key]");
     if (remove) {
@@ -857,6 +944,7 @@ $("#chartCoinList").addEventListener("click", event => {
 
 $("#addChartCoin").addEventListener("submit", async event => {
   event.preventDefault();
+  if (isMetalsChart) return;
   if (isDexChart) {
     const network = $("#chartDexNetwork").value;
     const input = $("#chartCoinInput");
@@ -939,7 +1027,17 @@ document.addEventListener("visibilitychange", () => {
 });
 
 readSmcPreferences();
-if (isDexChart) {
+if (isMetalsChart) {
+  $("#addChartCoin").hidden = true;
+  $(".chart-watchlist-heading h2").textContent = "Danh sách Vàng & Bạc";
+  $("#chartListState").textContent = "Giá mới nhất từ Metals Data Collector.";
+  const columns = document.querySelectorAll(".chart-list-columns span");
+  ["Sản phẩm", "Giá", "Side"].forEach((label, index) => { if (columns[index]) columns[index].textContent = label; });
+  document.querySelectorAll('[data-timeframe="1H"],[data-timeframe="4H"],[data-timeframe="8H"]').forEach(button => { button.hidden = true; });
+  $("#timeframes").insertAdjacentHTML("afterend", '<label id="metalSideControl">Loại giá <select id="metalSide" aria-label="Loại giá kim loại"></select></label>');
+  updateMetalSideControl();
+  $("#metalSide").addEventListener("change", event => { metalSide = event.target.value; renderChartList(); load(); });
+} else if (isDexChart) {
   let chartConfig = {};
   try {
     const response = await fetch("/api/config");

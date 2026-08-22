@@ -22,6 +22,13 @@
     "scanHours": [7, 15, 23],
     "minimumCandles": 61
   },
+  "metals": {
+    "chartCandles": 500,
+    "minimumAlertCandles": 100,
+    "requestTimeoutMs": 10000,
+    "timeframes": ["1D", "1W"],
+    "defaultTimeframe": "1D"
+  },
   "dex": {
     "timeframes": ["1H", "4H", "8H", "1D"],
     "defaultTimeframe": "4H",

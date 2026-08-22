@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.2.0 - 2026-08-22
+
+- Phát hành chính thức thị trường **Vàng & Bạc**, đọc dữ liệu duy nhất qua API nội bộ của `metals-data-collector v0.3.1`.
+- Hoàn thiện điều hướng phân tầng, bảng giá và chart D1/W1 cho ba sản phẩm Việt Nam cùng XAU/USD, XAG/USD và USD/VND.
+- Hiển thị BUY/SELL riêng cho giá trong nước, MID cho dữ liệu thế giới; dựng nến biến động cho lịch sử Việt Nam một mẫu/ngày và giữ nguyên OHLC quan sát thật khi có đủ mẫu.
+- Quy đổi XAU sang VND/lượng và XAG sang VND/kg theo USD/VND; tính premium/discount mua và bán cho Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999.
+- Phát hành cảnh báo tự động D1 cho đúng ba sản phẩm Việt Nam và chỉ phía `SELL`; không cảnh báo BUY, XAU, XAG hoặc USD/VND.
+- Chỉ dùng nến đã đóng, hỗ trợ chạy tay không ghi khóa, scheduler mặc định tắt, Telegram gộp và chỉ lưu khóa chống trùng sau khi gửi thành công.
+- Đã nghiệm thu giao diện, chart, so sánh, chạy tay và scheduler trên VPS demo với dữ liệu mạng thực tế.
+- Automated test: 134/134 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.2.0-dev.6 - 2026-08-22
+
+- Thêm cảnh báo tự động D1 cho đúng ba sản phẩm Việt Nam: Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999.
+- Chỉ quét phía `SELL`; không quét `BUY`, XAU/USD, XAG/USD hoặc USD/VND.
+- Scanner yêu cầu collector trả nến D1 đã đóng (`complete=true`) và dùng chung Signal hiện có.
+- Thêm lịch Vàng–Bạc D1 mặc định tắt lúc `07:10` giờ Việt Nam để có thể gộp với bản tin Crypto D1.
+- Thêm nút chạy tay **Chạy Vàng–Bạc SELL D1**, trạng thái lần chạy và báo cáo Telegram riêng.
+- Khóa chống gửi trùng gồm sản phẩm, `SELL`, D1, thời gian nến và tín hiệu; chạy tay không ghi khóa.
+- Các job trùng giờ tiếp tục gộp thành một bản tin; khóa chỉ được lưu sau khi bản tin gộp gửi thành công.
+- Automated test: 134/134 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.2.0-dev.5 - 2026-08-22
+
+- Hoàn thiện tab **So sánh Việt Nam – Thế giới** bằng dữ liệu mới nhất từ `metals-data-collector v0.3.1`.
+- Quy đổi XAU/USD sang VND/lượng và XAG/USD sang VND/kg theo USD/VND; không gọi thêm API bên ngoài.
+- Tính riêng premium/discount theo giá mua và giá bán cho Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999.
+- Hiển thị các đầu vào quy đổi, giá thế giới quy đổi, chênh lệch tuyệt đối và tỷ lệ phần trăm.
+- Dữ liệu tham chiếu thiếu chỉ vô hiệu phần so sánh, không làm hỏng bảng giá hoặc biểu đồ Vàng & Bạc.
+- Automated test: 128/128 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.2.0-dev.4.1 - 2026-08-22
+
+- Khôi phục điều hướng phân tầng đã chốt cho v3.2.0: bốn thị trường cấp 1 và các tab con riêng cho Crypto, Vàng & Bạc.
+- Giữ nguyên kiến trúc mới: cả 6 mã trong nước và thế giới đều đọc từ `metals-data-collector v0.3.1`; không dùng Twelve Data.
+- Tương thích URL cũ `#metals` bằng cách chuyển sang `#metals-overview`.
+- Dựng nến biến động cho lịch sử Việt Nam có một mẫu/ngày: Open lấy Close ngày trước, High/Low lấy hai đầu Open/Close; OHLC có nhiều mẫu vẫn được giữ nguyên.
+- Automated test: 126/126 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
+## 3.2.0-dev.4 - 2026-08-22
+
+- Thêm tab **Vàng & Bạc** với 6 sản phẩm từ `metals-data-collector v0.3.1`.
+- Trading Signal chỉ gọi API nội bộ tại `METALS_API_URL`; không phụ thuộc Twelve Data hoặc API kim loại bên ngoài.
+- Hiển thị riêng BUY/SELL cho vàng và bạc Việt Nam; XAU/XAG/USDVND dùng MID.
+- Thêm bridge `/api/metals/latest` và `/api/chart/metals`, có timeout và không mở trực tiếp collector ra Internet.
+- Tái sử dụng chart, EMA, Signal và SMC hiện có cho D1/W1; chart Việt Nam cho phép đổi Giá mua/Giá bán.
+- Thêm bộ lọc Tổng quan/Việt Nam/Thế giới và danh sách 6 sản phẩm bên phải chart.
+- Automated test: 123/123 đạt; kiểm tra cú pháp toàn bộ source đạt.
+
 ## 3.1.0 - 2026-08-08
 
 - Phát hành chính thức DEX scanner/chart `1H · 4H · 8H · D1`, chọn chain/contract/pool và workspace chart riêng.
