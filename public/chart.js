@@ -17,6 +17,7 @@ const params = new URLSearchParams(location.search);
 const chartMode = String(params.get("mode") || "CEX").toUpperCase();
 const isDexChart = chartMode === "DEX";
 const isMetalsChart = chartMode === "METALS";
+const isStockChart = chartMode === "STOCK";
 const metalItems = [
   { product: "VN_GOLD_SJC_BAR", name: "Vàng miếng SJC", market: "VIETNAM", currency: "VND", unit: "lượng" },
   { product: "VN_GOLD_RING_9999", name: "Nhẫn trơn 9999", market: "VIETNAM", currency: "VND", unit: "lượng" },
@@ -35,6 +36,7 @@ let dexTokenAddress = String(params.get("tokenAddress") || "");
 let dexPoolAddress = String(params.get("poolAddress") || "");
 let timeframe = ["1H", "4H", "8H", "1D", "1W"].includes(params.get("timeframe")) ? params.get("timeframe") : "1D";
 if (isMetalsChart && !["1D", "1W"].includes(timeframe)) timeframe = "1D";
+if (isStockChart) timeframe = "1D";
 const returnTab = normalizeAppTab(params.get("returnTab"));
 let payload = null;
 let layout = null;
@@ -120,6 +122,10 @@ function readChartWorkspace() {
     chartItems = [];
     return;
   }
+  if (isStockChart) {
+    chartItems = [normalizeChartItem({ exchange, symbol })].filter(Boolean);
+    return;
+  }
   if (isDexChart) {
     chartItems = [];
     let cached = null;
@@ -141,7 +147,7 @@ function readChartWorkspace() {
 }
 
 function saveChartWorkspace() {
-  if (isDexChart || isMetalsChart) return;
+  if (isDexChart || isMetalsChart || isStockChart) return;
   try {
     localStorage.setItem(chartWorkspaceKey, JSON.stringify({ selected: `${exchange}:${symbol}`, timeframe, items: chartItems }));
   } catch { /* danh sách vẫn hoạt động trong phiên hiện tại */ }
@@ -184,6 +190,20 @@ function renderChartList() {
     }).join("") : '<div class="chart-list-empty">Không có token DEX trong lượt quét gần nhất.</div>';
     return;
   }
+  if (isStockChart) {
+    $("#chartListCount").textContent = String(chartItems.length);
+    $("#chartCoinList").innerHTML = chartItems.length ? chartItems.map(item => {
+      const key = itemKey(item);
+      const quote = quotesByKey.get(key);
+      const selected = key === `${exchange}:${symbol}`;
+      const change = Number(quote?.changePercent);
+      const available = Number.isFinite(change);
+      const changeClass = !available ? "unavailable" : change < 0 ? "down" : "up";
+      const changeText = available ? `${change > 0 ? "+" : ""}${change.toFixed(2)}%` : "—";
+      return `<button class="chart-coin-row${selected ? " selected" : ""}" type="button" data-select-key="${h(key)}"><span class="chart-pair"><strong>${h(item.symbol)}</strong><small>${h(quote?.name || item.exchange)}</small></span><span class="chart-quote-price">${h(formatQuotePrice(quote?.price))}</span><span class="chart-change ${changeClass}">${h(changeText)}</span></button>`;
+    }).join("") : '<div class="chart-list-empty">Chưa có mã chứng khoán.</div>';
+    return;
+  }
   $("#chartListCount").textContent = String(chartItems.length);
   if (!chartItems.length) {
     $("#chartCoinList").innerHTML = '<div class="chart-list-empty">Nhập mã coin phía trên để bắt đầu.</div>';
@@ -205,6 +225,26 @@ function renderChartList() {
 async function refreshQuotes({ announce = false } = {}) {
   clearTimeout(quoteTimer);
   if (isDexChart) return;
+  if (isStockChart) {
+    if (document.hidden) {
+      quoteTimer = setTimeout(() => refreshQuotes(), 60_000);
+      return;
+    }
+    try {
+      const response = await fetch("/api/stocks/overview");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      chartItems = (data.rows || []).map(row => normalizeChartItem(row)).filter(Boolean);
+      if (!chartItems.some(item => itemKey(item) === `${exchange}:${symbol}`)) chartItems.unshift(normalizeChartItem({ exchange, symbol }));
+      quotesByKey = new Map((data.rows || []).map(row => [itemKey(row), { ...row, price: row.close }]));
+      if (announce) $("#chartListState").textContent = "Giá đóng D1 từ Stocks Data Collector.";
+      renderChartList();
+    } catch (error) {
+      if (announce) $("#chartListState").textContent = `Không tải được danh sách Stock: ${error.message}`;
+      renderChartList();
+    } finally { quoteTimer = setTimeout(() => refreshQuotes(), 60_000); }
+    return;
+  }
   if (isMetalsChart) {
     if (document.hidden) {
       quoteTimer = setTimeout(() => refreshQuotes(), 60_000);
@@ -710,8 +750,10 @@ async function load() {
       ? new URLSearchParams({ network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, timeframe })
       : isMetalsChart
         ? new URLSearchParams({ product: metalProduct, side: metalSide, timeframe, limit: "1000" })
-        : new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
-    const endpoint = isDexChart ? "/api/chart/dex" : isMetalsChart ? "/api/chart/metals" : "/api/chart/cex";
+        : isStockChart
+          ? new URLSearchParams({ symbol, timeframe: "1D", limit: "1000" })
+          : new URLSearchParams({ exchange, symbol, timeframe, limit: "1000" });
+    const endpoint = isDexChart ? "/api/chart/dex" : isMetalsChart ? "/api/chart/metals" : isStockChart ? "/api/chart/stocks" : "/api/chart/cex";
     const response = await fetch(`${endpoint}?${query}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     if (sequence !== loadSequence) return;
@@ -742,14 +784,18 @@ async function load() {
       ? `${data.market.network} · ${data.market.dex} · $${Number(data.market.liquidityUsd).toLocaleString("en-US", { maximumFractionDigits: 0 })} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`
       : isMetalsChart
         ? `${data.market.market === "VIETNAM" ? "Việt Nam" : "Thế giới"} · ${data.market.currency}/${data.market.unit} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`
-        : `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
+        : isStockChart
+          ? `${data.market.name || symbol} · ${exchange} · nghìn VND · ${data.candles.length} nến D1 đã đóng · ${data.market.provider || "database"}`
+          : `${exchange} · ${data.candles.length - liveBars} nến đã đóng${liveBars ? " + nến đang chạy" : ""}`;
     const nextParams = isDexChart
       ? { mode: "DEX", network: dexNetwork, tokenAddress: dexTokenAddress, poolAddress: dexPoolAddress, symbol, timeframe, returnTab }
       : isMetalsChart
         ? { mode: "METALS", product: metalProduct, side: metalSide, timeframe, returnTab }
-        : { exchange, symbol, timeframe, returnTab };
+        : isStockChart
+          ? { mode: "STOCK", exchange, symbol, timeframe: "1D", returnTab }
+          : { exchange, symbol, timeframe, returnTab };
     history.replaceState(null, "", `/chart.html?${new URLSearchParams(nextParams)}`);
-    document.title = `${isMetalsChart ? data.market.name : symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
+    document.title = `${isMetalsChart || isStockChart ? (data.market.name || symbol) : symbol} ${timeframe} · Trading Signal`; saveChartWorkspace(); renderChartList(); draw();
   } catch (error) {
     if (sequence !== loadSequence) return;
     $("#chartState").className = "chart-state chart-error"; $("#chartState").textContent = `Không tải được biểu đồ: ${error.message}`;
@@ -944,7 +990,7 @@ $("#chartCoinList").addEventListener("click", event => {
 
 $("#addChartCoin").addEventListener("submit", async event => {
   event.preventDefault();
-  if (isMetalsChart) return;
+  if (isMetalsChart || isStockChart) return;
   if (isDexChart) {
     const network = $("#chartDexNetwork").value;
     const input = $("#chartCoinInput");
@@ -1037,6 +1083,13 @@ if (isMetalsChart) {
   $("#timeframes").insertAdjacentHTML("afterend", '<label id="metalSideControl">Loại giá <select id="metalSide" aria-label="Loại giá kim loại"></select></label>');
   updateMetalSideControl();
   $("#metalSide").addEventListener("change", event => { metalSide = event.target.value; renderChartList(); load(); });
+} else if (isStockChart) {
+  $("#addChartCoin").hidden = true;
+  $(".chart-watchlist-heading h2").textContent = "Danh sách cổ phiếu";
+  $("#chartListState").textContent = "Giá đóng D1 từ Stocks Data Collector.";
+  const columns = document.querySelectorAll(".chart-list-columns span");
+  ["Mã", "Giá", "D1"].forEach((label, index) => { if (columns[index]) columns[index].textContent = label; });
+  document.querySelectorAll('[data-timeframe="1H"],[data-timeframe="4H"],[data-timeframe="8H"],[data-timeframe="1W"]').forEach(button => { button.hidden = true; });
 } else if (isDexChart) {
   let chartConfig = {};
   try {

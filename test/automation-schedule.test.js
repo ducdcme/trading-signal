@@ -4,6 +4,7 @@ import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "../lib/auto
 
 const settings = {
   enabled: true,
+  assets: { stocks: { enabled: true } },
   schedules: {
     cryptoDaily: { enabled: true, time: "07:10" },
     cryptoWeekly: { enabled: false, day: 1, time: "07:15" },
@@ -12,7 +13,8 @@ const settings = {
     newCoinScan: { enabled: true },
     dex4h: { enabled: true },
     dex8h: { enabled: true },
-    metalsDaily: { enabled: true, time: "07:10" }
+    metalsDaily: { enabled: true, time: "07:10" },
+    stockDaily: { enabled: true, time: "07:00" }
   }
 };
 
@@ -51,7 +53,8 @@ test("scheduler dispatches the fixed metals D1 job at its configured time", () =
 });
 
 test("metals report can join another automatic group in the same scheduler slot", () => {
-  const grouped = { ...settings, schedules: { ...settings.schedules, metalsDaily: { enabled: true, time: "07:10" } } };
+  const grouped = { ...settings, schedules: { ...settings.schedules, metalsDaily: { enabled: true, time: "07:10" },
+    stockDaily: { enabled: true, time: "07:00" } } };
   const jobs = dueAutomationJobs({ date: "2026-08-07", time: "07:10", day: 5 }, grouped, config);
   assert.deepEqual(jobs.map(job => job.key).sort(), ["cryptoDaily", "metalsDaily"]);
 });
@@ -60,4 +63,12 @@ test("scheduler does not dispatch Coin mới when master or its schedule is disa
   assert.deepEqual(dueAutomationJobs({ date: "2026-08-07", time: "07:05", day: 5 }, { ...settings, enabled: false }, config), []);
   const disabled = { ...settings, schedules: { ...settings.schedules, newCoinScan: { enabled: false } } };
   assert.equal(dueAutomationJobs({ date: "2026-08-07", time: "07:05", day: 5 }, disabled, config).some(job => job.timeframe === "NEW_COIN"), false);
+});
+
+test("scheduler dispatches Stock D1 at 07:00 only when Stock automation is enabled", () => {
+  const jobs = dueAutomationJobs({ date: "2026-08-25", time: "07:00", day: 2 }, settings, config);
+  assert.deepEqual(jobs.filter(job => job.assetGroup === "stocks"), [{ key: "stockDaily", timeframe: "1D", assetGroup: "stocks", due: true }]);
+  const disabled = { ...settings, assets: { stocks: { enabled: false } } };
+  assert.equal(dueAutomationJobs({ date: "2026-08-25", time: "07:00", day: 2 }, disabled, config).some(job => job.assetGroup === "stocks"), false);
+  assert.equal(dueAutomationJobs({ date: "2026-08-29", time: "07:00", day: 6 }, settings, config).some(job => job.assetGroup === "stocks"), false);
 });

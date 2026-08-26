@@ -11,6 +11,7 @@ const signalTypes = row => [...(row.buyTypes ?? []), ...(row.sellTypes ?? []), .
 const chartUrl = (exchange, symbol, timeframe = "1D", returnTab = "cex") => `/chart.html?${new URLSearchParams({ exchange, symbol, timeframe, returnTab: normalizeAppTab(returnTab) })}`;
 const dexChartUrl = row => `/chart.html?${new URLSearchParams({ mode: "DEX", network: row.network, tokenAddress: row.tokenAddress, poolAddress: row.poolAddress, symbol: row.instrumentId, timeframe: row.timeframe, returnTab: "dex" })}`;
 const metalsChartUrl = (product, side, returnTab = "metals-overview") => `/chart.html?${new URLSearchParams({ mode: "METALS", product, side, timeframe: "1D", returnTab: normalizeAppTab(returnTab) })}`;
+const stockChartUrl = (symbol, exchange = "VN", returnTab = "stocks") => `/chart.html?${new URLSearchParams({ mode: "STOCK", exchange, symbol, timeframe: "1D", returnTab: normalizeAppTab(returnTab) })}`;
 const scanCacheKeys = { cex: "trading-signal:cex-scan:v1", dex: "trading-signal:dex-scan:v1" };
 const chartWorkspaceKey = "trading-signal:chart-workspace:v1";
 const activeTabKey = "trading-signal:active-tab:v1";
@@ -219,6 +220,194 @@ document.querySelector('[data-market="metals"]').addEventListener("click", () =>
 document.querySelectorAll('[data-tab^="metals-"]').forEach(button => button.addEventListener("click", () => { if (!metalsPayload) loadMetals(); }));
 if (marketForTab(initialAppTab(location.hash, readActiveTab())) === "metals") loadMetals();
 
+let stocksPayload = null;
+let stockWatchlist = new Set();
+let stockScanResults = new Map();
+let stockGroups = new Map();
+
+function formatStockChange(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '<span class="stock-change neutral">—</span>';
+  const tone = number < 0 ? "down" : number > 0 ? "up" : "neutral";
+  const sign = number > 0 ? "+" : "";
+  return `<span class="stock-change ${tone}">${h(`${sign}${number.toFixed(2)}%`)}</span>`;
+}
+
+function formatStockDate(value) {
+  if (!value) return "—";
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp)) return h(value);
+  return new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
+}
+
+function stockSignalCell(symbol) {
+  const row = stockScanResults.get(symbol);
+  if (!row) return { badge: '<span class="badge none">—</span>', detail: "—" };
+  const detail = row.error || signalTypes(row).join(", ") || "—";
+  return { badge: `<span class="badge ${h(String(row.status).toLowerCase())}">${h(row.status)}</span>`, detail: h(detail) };
+}
+
+function selectedStockSymbols() {
+  return [...document.querySelectorAll('[data-stock-watch]:checked')].map(input => input.dataset.stockWatch);
+}
+
+function displayedStockRows(data) {
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const view = $("#stockListView")?.value || "WATCHLIST";
+  return view === "ALL" ? rows : rows.filter(row => stockWatchlist.has(row.symbol));
+}
+
+function renderStocks(data) {
+  const allRows = Array.isArray(data?.rows) ? data.rows : [];
+  const rows = displayedStockRows(data);
+  const view = $("#stockListView")?.value || "WATCHLIST";
+  $("#stockCount").textContent = view === "ALL" ? `${rows.length} mã` : `${rows.length} watch`;
+  $("#stockResults").innerHTML = rows.length ? rows.map(row => {
+    const chartHref = stockChartUrl(row.symbol, row.exchange, "stocks");
+    const latest = row.close == null ? Number.NaN : Number(row.close);
+    const signal = stockSignalCell(row.symbol);
+    const checked = stockWatchlist.has(row.symbol) ? " checked" : "";
+    return `<tr><td><input type="checkbox" data-stock-watch="${h(row.symbol)}"${checked}></td><td><a class="chart-link" href="${h(chartHref)}"><strong>${h(row.symbol)}</strong></a></td><td><span class="exchange">${h(row.exchange)}</span></td><td>${h(row.name || row.symbol)}</td><td><strong>${h(price(latest))}</strong><small>nghìn VND · ${h(row.provider || "database")}</small></td><td>${formatStockChange(row.changePercent)}</td><td>${signal.badge}</td><td>${signal.detail}</td><td>${h(formatStockDate(row.openTime))}</td><td><a class="chart-link" href="${h(chartHref)}">Mở D1</a></td><td><button type="button" class="secondary compact" data-stock-remove="${h(row.symbol)}">Xóa</button></td></tr>`;
+  }).join("") : `<tr><td colspan="11">${view === "WATCHLIST" ? "Watchlist đang trống. Chọn ‘Tất cả mã đã chuẩn bị’ để xem universe trong PostgreSQL." : "Chưa có dữ liệu chứng khoán."}</td></tr>`;
+}
+
+function renderStockGroups() {
+  const target = $("#stockGroupState");
+  const select = $("#stockScanScope");
+  if (!target || !select) return;
+  [...select.options].forEach(option => {
+    if (option.value === "WATCHLIST") { option.textContent = `Watchlist (${stockWatchlist.size})`; return; }
+    const row = stockGroups.get(option.value);
+    option.textContent = row ? `${option.value} (${row.preparedCount}/${row.total} sẵn sàng)` : option.value;
+  });
+  const scope = select.value;
+  if (scope === "WATCHLIST") { target.textContent = `Watchlist: ${stockWatchlist.size} mã sẽ được quét.`; return; }
+  const row = stockGroups.get(scope);
+  target.textContent = row ? `${scope}: ${row.preparedCount}/${row.total} mã đã có dữ liệu · ${row.missingCount} mã chưa chuẩn bị.` : "Chưa tải thông tin nhóm quét.";
+}
+
+async function loadStocks() {
+  const button = $("#reloadStocks");
+  button.disabled = true;
+  $("#stockState").textContent = "Đang đọc dữ liệu từ PostgreSQL…";
+  try {
+    const [overviewResponse, watchResponse, groupsResponse] = await Promise.all([fetch("/api/stocks/overview"), fetch("/api/stocks/watchlist"), fetch("/api/stocks/groups")]);
+    const data = await overviewResponse.json();
+    const watch = await watchResponse.json();
+    const groupsPayload = await groupsResponse.json();
+    if (!overviewResponse.ok) throw new Error(data.error || `HTTP ${overviewResponse.status}`);
+    if (!watchResponse.ok) throw new Error(watch.error || `HTTP ${watchResponse.status}`);
+    if (!groupsResponse.ok) throw new Error(groupsPayload.error || `HTTP ${groupsResponse.status}`);
+    stocksPayload = data;
+    stockWatchlist = new Set(watch.symbols || []);
+    stockGroups = new Map((groupsPayload.groups || []).map(row => [row.group, row]));
+    renderStocks(data);
+    renderStockGroups();
+    const viewLabel = ($("#stockListView")?.value || "WATCHLIST") === "ALL" ? "tất cả mã đã chuẩn bị" : "watchlist";
+    $("#stockState").textContent = `Đã đọc ${data.rows?.length || 0} mã · watchlist ${stockWatchlist.size} mã · đang hiển thị ${viewLabel}.`;
+  } catch (error) {
+    $("#stockCount").textContent = "0 mã";
+    $("#stockState").textContent = `Lỗi: ${error.message}`;
+    $("#stockResults").innerHTML = '<tr><td colspan="11">Không tải được dữ liệu Chứng khoán Việt Nam.</td></tr>';
+  } finally { button.disabled = false; }
+}
+
+$("#addStock").addEventListener("click", async () => {
+  const button = $("#addStock");
+  const input = $("#addStockSymbol");
+  const raw = String(input.value || "").trim();
+  if (!raw) { $("#stockState").textContent = "Nhập một hoặc nhiều mã chứng khoán cần thêm."; return; }
+  const estimated = [...new Set(raw.toUpperCase().split(/[\s,;]+/).filter(Boolean))];
+  button.disabled = true;
+  $("#stockState").textContent = `Đang xử lý ${estimated.length} mã · tự bỏ qua mã đã có…`;
+  try {
+    const response = await fetch("/api/stocks/instruments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbols: raw, years: 3 }) });
+    const data = await response.json();
+    if (!response.ok && response.status !== 207) throw new Error(data.error || `HTTP ${response.status}`);
+    if (data.added?.length || data.skipped?.length) {
+      input.value = "";
+      stocksPayload = null;
+      await loadStocks();
+    }
+    const added = data.added?.length || 0;
+    const skipped = data.skipped?.length || 0;
+    const failed = data.failed?.length || 0;
+    const failedText = failed ? ` · lỗi ${failed}: ${data.failed.map(item => item.symbol).join(", ")}` : "";
+    $("#stockState").textContent = `Xong ${data.requested || estimated.length} mã · thêm ${added} · đã có ${skipped}${failedText}.`;
+  } catch (error) { $("#stockState").textContent = `Lỗi thêm danh sách: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
+$("#addStockSymbol").addEventListener("keydown", event => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") $("#addStock").click(); });
+
+$("#stockResults").addEventListener("click", async event => {
+  const button = event.target.closest("[data-stock-remove]");
+  if (!button) return;
+  const symbol = button.dataset.stockRemove;
+  if (!confirm(`Xóa ${symbol} khỏi danh sách theo dõi? Dữ liệu lịch sử vẫn được giữ trong database.`)) return;
+  button.disabled = true;
+  $("#stockState").textContent = `Đang xóa ${symbol}…`;
+  try {
+    const response = await fetch(`/api/stocks/instruments?symbol=${encodeURIComponent(symbol)}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    stockWatchlist.delete(symbol);
+    stockScanResults.delete(symbol);
+    stocksPayload = null;
+    await loadStocks();
+    $("#stockState").textContent = `Đã xóa ${symbol}; dữ liệu lịch sử được giữ lại.`;
+  } catch (error) { $("#stockState").textContent = `Lỗi xóa mã: ${error.message}`; button.disabled = false; }
+});
+
+$("#reloadStocks").addEventListener("click", loadStocks);
+$("#saveStockWatchlist").addEventListener("click", async () => {
+  const button = $("#saveStockWatchlist");
+  button.disabled = true;
+  try {
+    const symbols = selectedStockSymbols();
+    const response = await fetch("/api/stocks/watchlist", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbols }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    stockWatchlist = new Set(data.symbols || []);
+    automationSnapshot.settings.assets.stocks.watchlist = [...stockWatchlist];
+    if ($("#autoStockSymbols")) $("#autoStockSymbols").value = [...stockWatchlist].join(", ");
+    renderStockGroups();
+    renderStocks(stocksPayload);
+    $("#stockState").textContent = `Đã lưu watchlist ${stockWatchlist.size} mã.`;
+  } catch (error) { $("#stockState").textContent = `Lỗi lưu watchlist: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
+$("#scanStocks").addEventListener("click", async () => {
+  const button = $("#scanStocks");
+  const scope = $("#stockScanScope").value;
+  const symbols = scope === "WATCHLIST" ? selectedStockSymbols() : [];
+  if (scope === "WATCHLIST" && !symbols.length) { $("#stockState").textContent = "Hãy chọn ít nhất 1 mã để quét D1."; return; }
+  const group = stockGroups.get(scope);
+  if (scope !== "WATCHLIST" && (!group || !group.preparedCount)) { $("#stockState").textContent = `Nhóm ${scope} chưa có mã nào được chuẩn bị dữ liệu.`; return; }
+  const count = scope === "WATCHLIST" ? symbols.length : group.preparedCount;
+  button.disabled = true; $("#stockState").textContent = `Đang quét D1 ${scope} · ${count} mã…`; $("#stockSummary").innerHTML = "";
+  try {
+    const response = await fetch("/api/scan/stocks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scope, symbols }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    stockScanResults = new Map(data.results.map(row => [row.symbol, row]));
+    renderSummary($("#stockSummary"), data.results);
+    renderStocks(stocksPayload);
+    $("#stockState").textContent = `Đã quét ${data.results.length} mã D1 · ${data.scope?.scope || scope} · ${new Date(data.generatedAt).toLocaleTimeString("vi-VN")}`;
+  } catch (error) { $("#stockState").textContent = `Lỗi quét Stock: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
+$("#stockListView").addEventListener("change", () => {
+  renderStocks(stocksPayload);
+  const view = $("#stockListView").value;
+  $("#stockState").textContent = view === "ALL" ? `Đang hiển thị tất cả ${stocksPayload?.rows?.length || 0} mã đã chuẩn bị.` : `Đang hiển thị watchlist ${stockWatchlist.size} mã.`;
+});
+$("#stockScanScope").addEventListener("change", renderStockGroups);
+document.querySelector('[data-market="stocks"]').addEventListener("click", () => { if (!stocksPayload) loadStocks(); });
+if (marketForTab(initialAppTab(location.hash, readActiveTab())) === "stocks") loadStocks();
+
 let automationSnapshot = await fetch("/api/automation").then(response => response.json());
 
 async function importTextFile(input, state, onLoaded) {
@@ -232,6 +421,14 @@ async function importTextFile(input, state, onLoaded) {
   try { onLoaded(await file.text(), file.name); }
   catch (error) { state.textContent = `Không đọc được file: ${error.message}`; }
 }
+
+$("#stockSymbolFile").addEventListener("change", () => importTextFile($("#stockSymbolFile"), $("#stockState"), (text, name) => {
+  const symbols = [...new Set(String(text).toUpperCase().split(/[\s,;]+/).map(value => value.trim()).filter(Boolean))];
+  if (!symbols.length) throw new Error("Không tìm thấy mã Stock hợp lệ");
+  if (symbols.length > 100) throw new Error("Mỗi lần chỉ hỗ trợ tối đa 100 mã Stock");
+  $("#addStockSymbol").value = symbols.join(" ");
+  $("#stockState").textContent = `Đã nạp ${symbols.length} mã Stock từ ${name}. Kiểm tra danh sách rồi bấm Thêm danh sách + backfill.`;
+}));
 
 $("#watchlistFile").addEventListener("change", () => importTextFile($("#watchlistFile"), $("#fileState"), (text, name) => {
   const imported = parseSymbols(text);
@@ -428,13 +625,34 @@ if (cachedDex?.data?.results?.length) {
   renderDexResults(cachedDex.data, true);
 }
 
+function stockRunDetail(run) {
+  if (!run) return { text: "Stock D1: chưa chạy trong phiên này.", className: "" };
+  if (run.status === "RUNNING") return { text: "Stock D1: đang chạy Daily Sync → quét D1…", className: "running" };
+  if (run.status === "SKIPPED") return { text: `Stock D1: bỏ qua · ${run.reason || "không có dữ liệu để quét"}.`, className: "skipped" };
+  if (run.status === "ERROR") return { text: `Stock D1: lỗi · ${run.errors || 1} lỗi.`, className: "error" };
+  return { text: `Stock D1: hoàn tất · sync ${run.synced || 0} mã · quét ${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi.`, className: "ok" };
+}
+
+function renderStockAutomationRuntime(lastRuns = {}) {
+  const element = $("#stockAutomationRuntime");
+  if (!element) return;
+  const detail = stockRunDetail(lastRuns["stocks:1D"]);
+  element.textContent = detail.text;
+  element.className = `stock-runtime ${detail.className}`.trim();
+}
+
 function renderLastRuns(lastRuns = {}) {
-  const rows = ["crypto:1D", "crypto:1W", "metals:1D", "dex:4H", "dex:8H", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
-    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : key === "metals:1D" ? "Vàng–Bạc SELL D1" : key.startsWith("dex:") ? `DEX ${run.timeframe || key.slice(4)}` : (run.timeframe || key.slice(7));
-    const detail = run.status === "ERROR" ? `Lỗi: ${run.error}` : `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
+  const rows = ["crypto:1D", "crypto:1W", "metals:1D", "stocks:1D", "dex:4H", "dex:8H", "focus", "newCoins"].map(key => [key, lastRuns[key] ?? lastRuns[key.slice(7)]]).filter(([, run]) => run).map(([key, run]) => {
+    const timeframe = key === "focus" ? `Theo dõi ${focusTimeframes.join("/")}` : key === "newCoins" ? `Coin mới ${newCoinTimeframe}` : key === "metals:1D" ? "Vàng–Bạc SELL D1" : key === "stocks:1D" ? "Stock D1" : key.startsWith("dex:") ? `DEX ${run.timeframe || key.slice(4)}` : (run.timeframe || key.slice(7));
+    let detail;
+    if (run.status === "RUNNING") detail = "Đang chạy…";
+    else if (run.status === "SKIPPED") detail = `Bỏ qua: ${run.reason || "không có dữ liệu mới"}`;
+    else if (run.status === "ERROR") detail = `Lỗi: ${run.errors || 1}`;
+    else detail = `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
   $("#lastRuns").innerHTML = rows.length ? rows.join("") : "Chưa có lần chạy tự động nào.";
+  renderStockAutomationRuntime(lastRuns);
 }
 
 function fillAutomation(data) {
@@ -448,6 +666,8 @@ function fillAutomation(data) {
   $("#weeklyTime").value = settings.schedules.cryptoWeekly.time;
   $("#metalsDailyEnabled").checked = settings.schedules.metalsDaily.enabled;
   $("#metalsDailyTime").value = settings.schedules.metalsDaily.time;
+  $("#stockDailyEnabled").checked = settings.schedules.stockDaily.enabled;
+  $("#stockDailyTime").value = settings.schedules.stockDaily.time;
   $("#focusScheduleEnabled").checked = settings.schedules.focusScan.enabled;
   $("#closedCandleMinute").value = String(settings.schedules.closedCandle.minute);
   updateClosedCandleSchedulePreview();
@@ -457,6 +677,10 @@ function fillAutomation(data) {
   $("#sendNoSignalSummary").checked = settings.telegram.sendNoSignalSummary;
   $("#autoCexEnabled").checked = settings.assets.cex.enabled;
   $("#autoDexEnabled").checked = settings.assets.dex.enabled;
+  $("#autoStockEnabled").checked = settings.assets.stocks.enabled;
+  $("#autoStockSymbols").value = (settings.assets.stocks.watchlist || []).join(", ");
+  const stockScopes = new Set(settings.assets.stocks.scopes?.length ? settings.assets.stocks.scopes : ["WATCHLIST"]);
+  document.querySelectorAll(".auto-stock-scope").forEach(input => { input.checked = stockScopes.has(input.value); });
   $("#autoCexSymbols").value = (settings.assets.cex.watchlist.length ? settings.assets.cex.watchlist : config.symbols).join(", ");
   $("#autoDexTokens").value = settings.assets.dex.watchlist.map(item => `${item.network}:${item.tokenAddress}${item.poolAddress ? `:${item.poolAddress}` : ""}`).join("\n");
   const configured = data.capabilities.telegramConfigured;
@@ -467,7 +691,7 @@ function fillAutomation(data) {
 
 function collectAutomation() {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     enabled: $("#automationEnabled").checked,
     telegram: {
       chatId: $("#telegramChatId").value.trim(),
@@ -478,7 +702,12 @@ function collectAutomation() {
       cex: { enabled: $("#autoCexEnabled").checked, watchlist: parseSymbols($("#autoCexSymbols").value) },
       dex: { enabled: $("#autoDexEnabled").checked, watchlist: parseDexTokens($("#autoDexTokens").value) },
       metals: automationSnapshot.settings.assets.metals,
-      stocks: automationSnapshot.settings.assets.stocks
+      stocks: {
+        enabled: $("#autoStockEnabled").checked,
+        watchlist: parseSymbols($("#autoStockSymbols").value),
+        scopes: [...document.querySelectorAll(".auto-stock-scope:checked")].map(input => input.value),
+        provider: "SSI"
+      }
     },
     schedules: {
       cryptoDaily: { enabled: $("#dailyEnabled").checked, time: $("#dailyTime").value },
@@ -489,7 +718,7 @@ function collectAutomation() {
       dex4h: { enabled: $("#dex4hScheduleEnabled").checked },
       dex8h: { enabled: $("#dex8hScheduleEnabled").checked },
       metalsDaily: { enabled: $("#metalsDailyEnabled").checked, time: $("#metalsDailyTime").value },
-      stockDaily: automationSnapshot.settings.schedules.stockDaily,
+      stockDaily: { enabled: $("#stockDailyEnabled").checked, time: $("#stockDailyTime").value },
       stockWeekly: automationSnapshot.settings.schedules.stockWeekly
     }
   };
@@ -510,6 +739,15 @@ async function saveAutomationSettings(showMessage = true) {
 }
 
 fillAutomation(automationSnapshot);
+
+async function refreshAutomationRuntime() {
+  try {
+    const data = await api("/api/automation");
+    automationSnapshot.state = data.state;
+    renderLastRuns(data.state?.lastRuns || {});
+  } catch { /* keep the last visible runtime state on transient UI polling errors */ }
+}
+setInterval(refreshAutomationRuntime, 5000);
 
 function remainingText(expiresAt, now = Date.now()) {
   const milliseconds = expiresAt - now;
@@ -629,6 +867,32 @@ $("#autoDexFile").addEventListener("change", () => importTextFile($("#autoDexFil
   $("#autoFileState").textContent = `Đã nạp ${tokens.length} token DEX từ ${name}. Bấm Lưu cấu hình để áp dụng.`;
 }));
 
+$("#autoStockFile").addEventListener("change", () => importTextFile($("#autoStockFile"), $("#autoFileState"), (text, name) => {
+  const symbols = parseSymbols(text);
+  if (!symbols.length) throw new Error("Không tìm thấy mã Stock hợp lệ");
+  $("#autoStockSymbols").value = symbols.join(", ");
+  $("#autoFileState").textContent = `Đã nạp ${symbols.length} mã Stock từ ${name}. Bấm Lưu cấu hình để áp dụng.`;
+}));
+
+$("#prepareAutoStocks").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  const raw = String($("#autoStockSymbols").value || "").trim();
+  const symbols = parseSymbols(raw);
+  if (!symbols.length) { $("#autoStockPrepareState").textContent = "Hãy nhập hoặc nạp ít nhất một mã Stock."; return; }
+  button.disabled = true;
+  $("#autoStockPrepareState").textContent = `Đang kiểm tra và chuẩn bị ${symbols.length} mã…`;
+  try {
+    const response = await fetch("/api/stocks/instruments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbols, years: 3 }) });
+    const data = await response.json();
+    if (!response.ok && response.status !== 207) throw new Error(data.error || `HTTP ${response.status}`);
+    const added = data.added?.length || 0;
+    const skipped = data.skipped?.length || 0;
+    const failed = data.failed?.length || 0;
+    $("#autoStockPrepareState").textContent = `Chuẩn bị xong · thêm ${added} · đã có ${skipped} · lỗi ${failed}${failed ? ` (${data.failed.map(item => item.symbol).join(", ")})` : ""}.`;
+  } catch (error) { $("#autoStockPrepareState").textContent = `Lỗi chuẩn bị Stock: ${error.message}`; }
+  finally { button.disabled = false; }
+});
+
 $("#saveAutomation").addEventListener("click", async () => {
   const button = $("#saveAutomation"); button.disabled = true; $("#automationState").textContent = "Đang lưu…";
   try { await saveAutomationSettings(); }
@@ -683,6 +947,17 @@ async function runMetalsNow(button) {
   finally { button.disabled = false; }
 }
 $("#runMetalsDailyNow").addEventListener("click", event => runMetalsNow(event.currentTarget));
+async function runStocksNow(button) {
+  button.disabled = true; $("#automationState").textContent = "Đang Daily Sync Stock → quét D1 → gửi Telegram…";
+  try {
+    await saveAutomationSettings(false);
+    const result = await api("/api/automation/stocks/run", { method: "POST" });
+    $("#automationState").textContent = `Stock D1: sync ${result.synced} mã · quét ${result.total} mã · gửi ${result.sentSignals} tín hiệu · ${result.errors} lỗi.`;
+    automationSnapshot = await api("/api/automation"); renderLastRuns(automationSnapshot.state.lastRuns);
+  } catch (error) { $("#automationState").textContent = `Lỗi: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+$("#runStocksDailyNow").addEventListener("click", event => runStocksNow(event.currentTarget));
 async function runDexNow(timeframe, button) {
   button.disabled = true; $("#automationState").textContent = `Đang quét DEX ${timeframe} và gửi Telegram…`;
   try {

@@ -1,9 +1,31 @@
 {
   "quoteAsset": "USDT",
-  "quotePriority": ["USDT", "USDC", "FDUSD"],
+  "quotePriority": [
+    "USDT",
+    "USDC",
+    "FDUSD"
+  ],
   "interval": "1d",
-  "exchangePriority": ["BINANCE", "OKX", "BYBIT", "BITGET", "KUCOIN", "GATE", "MEXC"],
-  "symbols": ["BTC", "ETH", "BNB", "SOL", "FLUX", "GTC", "ATOM", "MNT", "PI"],
+  "exchangePriority": [
+    "BINANCE",
+    "OKX",
+    "BYBIT",
+    "BITGET",
+    "KUCOIN",
+    "GATE",
+    "MEXC"
+  ],
+  "symbols": [
+    "BTC",
+    "ETH",
+    "BNB",
+    "SOL",
+    "FLUX",
+    "GTC",
+    "ATOM",
+    "MNT",
+    "PI"
+  ],
   "candleLimit": 1000,
   "requestConcurrency": 3,
   "automation": {
@@ -11,26 +33,53 @@
     "schedulerPollSeconds": 30
   },
   "focus": {
-    "timeframes": ["4H", "8H"],
+    "timeframes": [
+      "4H",
+      "8H"
+    ],
     "defaultTimeframe": "4H",
     "retentionDays": 7,
-    "scanHours": [3, 7, 11, 15, 19, 23]
+    "scanHours": [
+      3,
+      7,
+      11,
+      15,
+      19,
+      23
+    ]
   },
   "newCoins": {
     "timeframe": "8H",
-    "exchangePriority": ["BINANCE", "OKX", "BYBIT"],
-    "scanHours": [7, 15, 23],
+    "exchangePriority": [
+      "BINANCE",
+      "OKX",
+      "BYBIT"
+    ],
+    "scanHours": [
+      7,
+      15,
+      23
+    ],
     "minimumCandles": 61
   },
   "metals": {
     "chartCandles": 500,
     "minimumAlertCandles": 100,
     "requestTimeoutMs": 10000,
-    "timeframes": ["1D", "1W"],
+    "adminTimeoutMs": 300000,
+    "timeframes": [
+      "1D",
+      "1W"
+    ],
     "defaultTimeframe": "1D"
   },
   "dex": {
-    "timeframes": ["1H", "4H", "8H", "1D"],
+    "timeframes": [
+      "1H",
+      "4H",
+      "8H",
+      "1D"
+    ],
     "defaultTimeframe": "4H",
     "maxTokensPerScan": 10,
     "minimumCandles": 100,
@@ -46,11 +95,31 @@
     "cacheMinutes": 10,
     "alerts": {
       "closeHours": {
-        "4H": [3, 7, 11, 15, 19, 23],
-        "8H": [7, 15, 23]
+        "4H": [
+          3,
+          7,
+          11,
+          15,
+          19,
+          23
+        ],
+        "8H": [
+          7,
+          15,
+          23
+        ]
       }
     },
-    "networks": ["solana", "eth", "base", "bsc", "arbitrum", "polygon_pos", "avax", "optimism"],
+    "networks": [
+      "solana",
+      "eth",
+      "base",
+      "bsc",
+      "arbitrum",
+      "polygon_pos",
+      "avax",
+      "optimism"
+    ],
     "networkLabels": {
       "solana": "Solana",
       "eth": "Ethereum",
@@ -61,5 +130,17 @@
       "avax": "Avalanche",
       "optimism": "Optimism"
     }
+  },
+  "stocks": {
+    "chartCandles": 500,
+    "requestTimeoutMs": 10000,
+    "adminTimeoutMs": 300000,
+    "timeframes": [
+      "1D",
+      "1W"
+    ],
+    "defaultTimeframe": "1D",
+    "minimumCandles": 100,
+    "scanCandles": 500
   }
 }

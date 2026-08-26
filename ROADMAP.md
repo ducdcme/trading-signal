@@ -212,3 +212,7 @@
 3. Trên VPS production, kiểm tra worktree sạch rồi `git pull --ff-only`; giữ nguyên `.env` và `DATA_DIR` ngoài source.
 4. Chạy `npm test`, `npm run check`, reload PM2 và kiểm tra `/api/health` trả `3.2.0`.
 5. Đăng nhập giao diện, kiểm tra Metals Collector và bật lịch Vàng–Bạc D1 khi sẵn sàng.
+
+
+## v3.3.0 — CLOSED / RELEASED (2026-08-26)
+VN Stock workflow completed and full regression passed. See `RELEASE-V3.3.0.md`.

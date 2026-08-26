@@ -1,4 +1,4 @@
-# Trading Signal
+# Trading Signal v3.3.0
 
 Phiên bản chính thức: **3.2.0**, phát triển từ production **3.1.0**. Bản này kết nối `metals-data-collector v0.3.1`, giữ điều hướng phân tầng, hiển thị biểu đồ D1/W1, so sánh giá quy đổi và bổ sung cảnh báo Telegram D1 cho giá bán trong nước.
 

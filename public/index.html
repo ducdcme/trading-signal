@@ -131,12 +131,13 @@
     </section>
 
     <section class="tab-panel" id="panel-stocks">
-      <section class="controls coming-soon">
-        <p class="eyebrow">SSI FASTCONNECT DATA</p><h2>Chứng khoán Việt Nam</h2>
-        <p>Kiến trúc cấu hình và scheduler đã dành sẵn nguồn STOCK cho FPT, HPG, MBB, DGC, VIX… Kết nối dữ liệu OHLCV điều chỉnh qua SSI sẽ được triển khai ở giai đoạn sau.</p>
-        <textarea rows="3" disabled>FPT, HPG, MBB, DGC, VIX</textarea>
-        <button disabled>Chưa cấu hình SSI API</button>
+      <section class="controls stock-controls">
+        <div class="section-heading"><div><p class="eyebrow">SSI · POSTGRESQL</p><h2>Chứng khoán Việt Nam</h2><p>Dữ liệu D1 đã đóng từ Stocks Data Collector. Chọn mã để mở biểu đồ dùng chung EMA, Signal và SMC của Trading Signal.</p></div><span id="stockCount" class="status-pill">0 mã</span></div>
+        <div class="stock-toolbar"><textarea id="addStockSymbol" rows="2" placeholder="Nhập 1 hoặc nhiều mã: VCB MBB ACB... (cách nhau bằng dấu cách, dấu phẩy hoặc xuống dòng)" spellcheck="false"></textarea><label class="file-button" for="stockSymbolFile">Nạp .txt</label><input id="stockSymbolFile" class="hidden-file" type="file" accept=".txt,text/plain"><button id="addStock" type="button">Thêm danh sách + backfill</button><button id="reloadStocks" type="button" class="secondary">Tải lại dữ liệu</button><button id="saveStockWatchlist" type="button" class="secondary">Lưu watchlist</button><label class="stock-view-control"><span>Hiển thị</span><select id="stockListView" aria-label="Danh sách Stock hiển thị"><option value="WATCHLIST">Watchlist</option><option value="ALL">Tất cả mã đã chuẩn bị</option></select></label><select id="stockScanScope" aria-label="Phạm vi quét Stock"><option value="WATCHLIST">Watchlist</option><option value="VN30">VN30</option><option value="HOSE">HOSE</option><option value="HNX">HNX</option><option value="UPCOM">UPCOM</option></select><button id="scanStocks" type="button">Quét D1</button><span id="stockState">Đang chờ tải dữ liệu…</span></div><div id="stockGroupState" class="stock-group-state"></div>
       </section>
+      <section id="stockSummary" class="summary"></section>
+      <section class="table-wrap stock-table"><table><thead><tr><th>Watch</th><th>Mã</th><th>Sàn</th><th>Tên</th><th>Giá đóng</th><th>Thay đổi D1</th><th>Tín hiệu</th><th>Chi tiết</th><th>Cập nhật</th><th>Biểu đồ</th><th>Quản lý</th></tr></thead><tbody id="stockResults"></tbody></table></section>
+      <p class="note">DEV 2 Part 4: scanner hỗ trợ Watchlist, VN30, HOSE, HNX và UPCOM. Quét chỉ đọc PostgreSQL; để chuẩn bị nhanh một nhóm mã, dán cả danh sách vào ô trên và backfill một lần. Stock Automation/Telegram được cấu hình ở tab Tự động & Telegram; scanner thủ công vẫn chỉ đọc PostgreSQL.</p>
     </section>
 
     <section class="tab-panel" id="panel-automation">
@@ -160,6 +161,7 @@
             <div class="schedule-row"><label class="check-row"><input id="dailyEnabled" type="checkbox"> D1</label><div class="schedule-fields"><input id="dailyTime" type="time"></div><span class="schedule-note">mỗi ngày</span></div>
             <div class="schedule-row"><label class="check-row"><input id="weeklyEnabled" type="checkbox"> W1</label><div class="schedule-fields weekly-fields"><select id="weeklyDay"><option value="1">Thứ Hai</option><option value="2">Thứ Ba</option><option value="3">Thứ Tư</option><option value="4">Thứ Năm</option><option value="5">Thứ Sáu</option><option value="6">Thứ Bảy</option><option value="7">Chủ nhật</option></select><input id="weeklyTime" type="time"></div><span class="schedule-note">mỗi tuần</span></div>
             <div class="schedule-row"><label class="check-row"><input id="metalsDailyEnabled" type="checkbox"> Vàng–Bạc D1</label><div class="schedule-fields"><input id="metalsDailyTime" type="time"></div><span class="schedule-note">SELL · 3 sản phẩm VN</span></div>
+            <div class="schedule-row"><label class="check-row"><input id="stockDailyEnabled" type="checkbox"> Stock D1</label><div class="schedule-fields"><input id="stockDailyTime" type="time"></div><span class="schedule-note">sync DB trước · mặc định 07:00</span></div>
             <div class="schedule-row"><strong>Khung nhỏ</strong><div class="schedule-fields minute-fields"><input id="closedCandleMinute" type="number" min="0" max="59"><span>phút</span></div><span class="schedule-note">sau giờ đóng nến</span></div>
             <div class="schedule-groups">
               <label class="check-row"><input id="focusScheduleEnabled" type="checkbox"> Theo dõi <span class="focus-timeframes-label">4H/8H</span></label>
@@ -185,12 +187,21 @@
             </div>
           </div>
           <div class="future-asset active-asset"><strong>VÀNG &amp; BẠC · SELL D1</strong><span>Vàng miếng SJC, Nhẫn trơn 9999 và Bạc 999; danh sách cố định, không quét BUY/XAU/XAG/USDVND.</span></div>
-          <div class="future-asset"><strong>STOCK · SSI</strong><span>Đã có schema watchlist và lịch riêng; adapter dữ liệu chưa bật.</span></div>
+          <div class="stock-auto-panel">
+            <div class="watchlist-import compact">
+              <div><label class="check-row"><input id="autoStockEnabled" type="checkbox"> <strong>STOCK · SSI</strong></label><small>Danh sách Stock chạy tự động · đồng bộ với Watchlist ở tab Chứng khoán Việt Nam</small></div>
+              <label class="file-button" for="autoStockFile">Nạp .txt</label><input id="autoStockFile" class="hidden-file" type="file" accept=".txt,text/plain">
+            </div>
+            <textarea id="autoStockSymbols" rows="4" spellcheck="false" placeholder="FPT, HPG, MBB, VCB, TCB"></textarea>
+            <div class="inline-actions stock-prepare-actions"><button class="secondary" id="prepareAutoStocks" type="button">Chuẩn bị mã thiếu + backfill</button><small id="autoStockPrepareState">Chỉ mã chưa có trong PostgreSQL mới được backfill.</small></div>
+            <div class="stock-auto-scopes"><label class="check-row"><input class="auto-stock-scope" type="checkbox" value="WATCHLIST"> Watchlist</label><label class="check-row"><input class="auto-stock-scope" type="checkbox" value="VN30"> VN30</label><label class="check-row"><input class="auto-stock-scope" type="checkbox" value="HOSE"> HOSE</label><label class="check-row"><input class="auto-stock-scope" type="checkbox" value="HNX"> HNX</label><label class="check-row"><input class="auto-stock-scope" type="checkbox" value="UPCOM"> UPCOM</label></div>
+            <div id="stockAutomationRuntime" class="stock-runtime">Stock D1: chưa chạy trong phiên này.</div>
+          </div>
           <p id="autoFileState" class="file-state"></p>
         </fieldset>
 
         <div class="option-row"><label class="check-row"><input id="sendNoSignalSummary" type="checkbox"> Gửi thống kê lượt quét khi không có tín hiệu mới</label><small>Các nhóm trùng thời điểm được gộp trong một bản tin; chi tiết lỗi chỉ ghi log.</small></div>
-        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runMetalsDailyNow">Chạy Vàng–Bạc SELL D1</button><button class="secondary" id="runDex4hNow">Chạy DEX 4H</button><button class="secondary" id="runDex8hNow">Chạy DEX 8H</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
+        <div class="actions automation-actions"><button id="saveAutomation">Lưu cấu hình</button><button class="secondary" id="runDailyNow">Chạy D1 ngay</button><button class="secondary" id="runWeeklyNow">Chạy W1 ngay</button><button class="secondary" id="runMetalsDailyNow">Chạy Vàng–Bạc SELL D1</button><button class="secondary" id="runStocksDailyNow">Chạy Stock D1</button><button class="secondary" id="runDex4hNow">Chạy DEX 4H</button><button class="secondary" id="runDex8hNow">Chạy DEX 8H</button><button class="secondary" id="runNewCoinsAutomationNow">Chạy Coin mới 8H</button><span id="automationState">Chưa lưu thay đổi</span></div>
         <div id="lastRuns" class="last-runs"></div>
       </section>
     </section>

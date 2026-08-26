@@ -28,6 +28,7 @@ import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "./lib/autom
 import { formatAutomationReport, formatScheduledBatchReport } from "./lib/automation-report.js";
 import { assertPinnedDexAlertTokens } from "./lib/dex-alerts.js";
 import { buildMetalComparison, fetchMetalCandles, fetchMetalsLatest, METAL_ALERT_PRODUCTS, METAL_PRODUCTS } from "./lib/metals.js";
+import { addStockInstrument, fetchStockCandles, fetchStockSymbols, fetchStockUniverseGroups, normalizeStockSymbol, parseStockSymbolList, removeStockInstrument, summarizeStockCandles, syncStockDaily } from "./lib/stocks.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -48,6 +49,10 @@ const production = process.env.NODE_ENV === "production";
 const metalsApi = {
   baseUrl: process.env.METALS_API_URL || "http://127.0.0.1:8787/",
   timeoutMs: Number(config.metals?.requestTimeoutMs) || 10_000
+};
+const stocksApi = {
+  baseUrl: process.env.STOCKS_API_URL || "http://127.0.0.1:8790/",
+  timeoutMs: Number(config.stocks?.requestTimeoutMs) || 10_000
 };
 const auth = loadAuthConfig();
 if (production && !auth.enabled) throw new Error("Production bị khóa: hãy chạy npm run generate-auth và cấu hình AUTH_* trong .env");
@@ -166,6 +171,101 @@ async function scan(instruments, timeframe) {
       return { assetType: "CEX", symbol: instrument.key, exchange: instrument.exchange, instrumentId: instrument.instrumentId, timeframe, status, error: error.message };
     }
   });
+}
+
+async function scanStocks(symbols) {
+  const catalog = await fetchStockSymbols(stocksApi);
+  const bySymbol = new Map(catalog.map(item => [item.symbol, item]));
+  return mapLimited(symbols, Math.max(1, Math.min(config.requestConcurrency, 5)), async rawSymbol => {
+    const symbol = normalizeStockSymbol(rawSymbol);
+    const meta = bySymbol.get(symbol);
+    if (!meta) return { assetType: "STOCK", symbol, instrumentId: symbol, exchange: "VN", timeframe: "1D", status: "SKIPPED", error: "Mã không có trong Stocks Data Collector" };
+    try {
+      const market = await fetchStockCandles(symbol, config.stocks.scanCandles || 500, stocksApi);
+      return {
+        assetType: "STOCK", asset: symbol, symbol, instrumentId: symbol, exchange: meta.exchange,
+        name: meta.name, quote: "VND", provider: market.provider, timeframe: "1D",
+        ...analyzeCandles(market.candles, "1D", config.stocks.minimumCandles || 100)
+      };
+    } catch (error) {
+      return { assetType: "STOCK", symbol, instrumentId: symbol, exchange: meta.exchange, name: meta.name, timeframe: "1D", status: "ERROR", error: error.message };
+    }
+  });
+}
+
+async function resolveStockAutomationSymbols(settings) {
+  const stocks = settings.assets?.stocks || {};
+  const scopes = Array.isArray(stocks.scopes) && stocks.scopes.length ? stocks.scopes : ["WATCHLIST"];
+  const catalog = await fetchStockSymbols(stocksApi);
+  const active = new Set(catalog.map(item => item.symbol));
+  const selected = new Set();
+  if (scopes.includes("WATCHLIST")) {
+    for (const symbol of stocks.watchlist || []) {
+      const normalized = normalizeStockSymbol(symbol);
+      if (active.has(normalized)) selected.add(normalized);
+    }
+  }
+  const marketScopes = scopes.filter(scope => scope !== "WATCHLIST");
+  if (marketScopes.length) {
+    const groups = await fetchStockUniverseGroups(stocksApi);
+    const byGroup = new Map(groups.map(group => [group.group, group]));
+    for (const scope of marketScopes) {
+      const group = byGroup.get(scope);
+      if (!group) continue;
+      for (const item of group.prepared || []) selected.add(item.symbol);
+    }
+  }
+  return { scopes, symbols: [...selected] };
+}
+
+async function runStocksAutomation(trigger = "manual", options = {}) {
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+  if (!settings.assets.stocks.enabled) throw new Error("Cảnh báo Chứng khoán Việt Nam đang tắt");
+
+  const selection = await resolveStockAutomationSymbols(settings);
+  if (!selection.symbols.length) throw new Error("Stock automation chưa có mã prepared để quét");
+
+  const runningState = await loadAutomationState(automationStatePath);
+  runningState.lastRuns = {
+    ...(runningState.lastRuns || {}),
+    "stocks:1D": { at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes, total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, synced: 0, freshCandles: 0, status: "RUNNING" }
+  };
+  await saveAutomationState(automationStatePath, runningState);
+
+  const sync = await syncStockDaily(selection.symbols, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
+  const syncRows = Array.isArray(sync?.results) ? sync.results : [];
+  const freshCandles = syncRows.reduce((total, row) => total + Number(row.fetched || 0), 0);
+  const rows = await scanStocks(selection.symbols);
+  const state = await loadAutomationState(automationStatePath);
+  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, "1D", trigger);
+  logScanErrors("stocks:1D", rows);
+  const errors = rows.filter(row => row.status === "ERROR");
+  const allFailed = rows.length > 0 && errors.length === rows.length;
+  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
+  const scopeLabel = selection.scopes.join("+");
+  const telegramText = shouldSend ? formatAutomationReport("1D", rows, delivery, settings, trigger, `CHỨNG KHOÁN VN · ${scopeLabel}`) : "";
+  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
+
+  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
+  state.lastRuns = {
+    ...(state.lastRuns || {}),
+    "stocks:1D": {
+      at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
+      total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+      suppressedSignals: delivery.suppressed, errors: errors.length, synced: syncRows.length, freshCandles, status: "OK"
+    }
+  };
+  await saveAutomationState(automationStatePath, state);
+  return {
+    timeframe: "1D", scopes: selection.scopes, total: rows.length,
+    detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+    suppressedSignals: delivery.suppressed, errors: errors.length,
+    synced: syncRows.length, freshCandles,
+    messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
+  };
 }
 
 async function scanFocusItems(items) {
@@ -314,7 +414,7 @@ async function runAutomation(timeframe, trigger = "manual", options = {}) {
   if (!rows.length) throw new Error("Watchlist tự động đang trống");
 
   const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(rows, state.sentKeys, timeframe, trigger);
+  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, timeframe, trigger);
   logScanErrors(`crypto:${timeframe}`, rows);
 
   const allFailed = rows.length > 0 && rows.every(row => row.status === "ERROR");
@@ -339,7 +439,7 @@ async function runDexAutomation(timeframe, trigger = "manual", options = {}) {
   const tokens = assertPinnedDexAlertTokens(parseDexTokens(settings.assets.dex.watchlist));
   const rows = await scanDex(tokens, timeframe);
   const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(rows, state.sentKeys, timeframe, trigger);
+  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, timeframe, trigger);
   logScanErrors(`dex:${timeframe}`, rows);
 
   const errors = rows.filter(row => row.status === "ERROR");
@@ -374,7 +474,7 @@ async function runMetalsAutomation(trigger = "manual", options = {}) {
 
   const rows = await scanMetals();
   const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(rows, state.sentKeys, "1D", trigger);
+  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, "1D", trigger);
   logScanErrors("metals:1D", rows);
   const errors = rows.filter(row => row.status === "ERROR");
   const allFailed = rows.length > 0 && errors.length === rows.length;
@@ -415,7 +515,7 @@ async function runFocusAutomation(trigger = "manual", options = {}) {
   const rows = await scanFocusItems(active);
   const matched = rows.filter(focusDirectionMatched).map(row => ({ ...row, status: row.expectedDirection }));
   const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(matched, state.sentKeys, "FOCUS", trigger);
+  const delivery = selectDeliverySignals(matched, options.sentKeys ?? state.sentKeys, "FOCUS", trigger);
   const errors = rows.filter(row => row.status === "ERROR");
   logScanErrors("focus", rows);
   const shouldSend = delivery.delivered.length > 0 || (rows.length > 0 && errors.length === rows.length);
@@ -450,7 +550,7 @@ async function runNewCoinAutomation(trigger = "manual", options = {}) {
 
   const rows = await scanNewCoinItems(active);
   const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(rows, state.sentKeys, `NEW_COIN:${config.newCoins.timeframe}`, trigger);
+  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, `NEW_COIN:${config.newCoins.timeframe}`, trigger);
   delivery.paused = paused;
   const errors = rows.filter(row => row.status === "ERROR");
   logScanErrors("new-coins:8H", rows);
@@ -480,6 +580,16 @@ async function runNewCoinAutomation(trigger = "manual", options = {}) {
 }
 
 let schedulerBusy = false;
+
+function scheduledJobLabel(job) {
+  if (job.assetGroup === "stocks") return "Stock D1";
+  if (job.assetGroup === "metals") return "Vàng/Bạc D1";
+  if (job.assetGroup === "dex") return `DEX ${job.timeframe}`;
+  if (job.timeframe === "FOCUS") return "Focus";
+  if (job.timeframe === "NEW_COIN") return `Coin mới ${config.newCoins.timeframe}`;
+  return `Crypto ${job.timeframe}`;
+}
+
 async function schedulerTick() {
   if (schedulerBusy) return;
   schedulerBusy = true;
@@ -487,38 +597,86 @@ async function schedulerTick() {
     const settings = effectiveAutomation(await loadAutomation(automationPath));
     const clock = localClock(new Date(), settings.timezone);
     const jobs = dueAutomationJobs(clock, settings, config);
+    if (!jobs.length) return;
+
+    const slot = `${clock.date}|${clock.time}`;
+    const initial = await loadAutomationState(automationStatePath);
+    const pendingJobs = jobs.filter(job => initial.lastSlots?.[job.key] !== slot);
+    if (!pendingJobs.length) return;
+
+    // A persisted batch marker gives the scheduler at-most-once behavior across
+    // process restarts. If a process died while a Telegram send was in-flight,
+    // we deliberately do not retry that slot because avoiding duplicates is the
+    // safer policy for alert delivery.
+    if (["sending", "sent", "failed-send"].includes(initial.batchSlots?.[slot]?.status)) return;
+
     const reports = [];
-    const scheduledSentKeys = [];
-    for (const job of jobs) {
-      const slot = `${clock.date}|${clock.time}`;
-      const state = await loadAutomationState(automationStatePath);
-      if (state.lastSlots?.[job.key] === slot) continue;
-      state.lastSlots = { ...(state.lastSlots || {}), [job.key]: slot };
-      await saveAutomationState(automationStatePath, state);
+    const failures = [];
+    let sharedSentKeys = [...(initial.sentKeys || [])];
+    const completedKeys = [];
+
+    for (const job of pendingJobs) {
       try {
         let result;
-        if (job.assetGroup === "dex") result = await runDexAutomation(job.timeframe, "schedule", { deferTelegram: true });
-        else if (job.assetGroup === "metals") result = await runMetalsAutomation("schedule", { deferTelegram: true });
-        else if (job.timeframe === "FOCUS") result = await runFocusAutomation("schedule", { deferTelegram: true });
-        else if (job.timeframe === "NEW_COIN") result = await runNewCoinAutomation("schedule", { deferTelegram: true });
-        else result = await runAutomation(job.timeframe, "schedule", { deferTelegram: true });
+        const options = { deferTelegram: true, sentKeys: sharedSentKeys };
+        if (job.assetGroup === "dex") result = await runDexAutomation(job.timeframe, "schedule", options);
+        else if (job.assetGroup === "metals") result = await runMetalsAutomation("schedule", options);
+        else if (job.assetGroup === "stocks") result = await runStocksAutomation("schedule", options);
+        else if (job.timeframe === "FOCUS") result = await runFocusAutomation("schedule", options);
+        else if (job.timeframe === "NEW_COIN") result = await runNewCoinAutomation("schedule", options);
+        else result = await runAutomation(job.timeframe, "schedule", options);
+
         if (result.telegramText) reports.push(result.telegramText);
-        if (Array.isArray(result.sentKeys)) scheduledSentKeys.push(...result.sentKeys);
-      }
-      catch (error) {
+        if (Array.isArray(result.sentKeys)) sharedSentKeys = result.sentKeys;
+        completedKeys.push(job.key);
+      } catch (error) {
         const latest = await loadAutomationState(automationStatePath);
-        const runKey = job.assetGroup === "dex" ? `dex:${job.timeframe}` : job.assetGroup === "metals" ? "metals:1D" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
-        const assetGroup = job.assetGroup === "dex" ? "dex" : job.assetGroup === "metals" ? "metals" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
-        latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup, timeframe: job.timeframe === "NEW_COIN" ? config.newCoins.timeframe : job.timeframe, trigger: "schedule", status: "ERROR", error: error.message } };
+        const runKey = job.assetGroup === "dex" ? `dex:${job.timeframe}` : job.assetGroup === "metals" ? "metals:1D" : job.assetGroup === "stocks" ? "stocks:1D" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "newCoins" : `crypto:${job.timeframe}`;
+        const assetGroup = job.assetGroup === "dex" ? "dex" : job.assetGroup === "metals" ? "metals" : job.assetGroup === "stocks" ? "stocks" : job.timeframe === "FOCUS" ? "focus" : job.timeframe === "NEW_COIN" ? "new-coins" : "crypto";
+        latest.lastRuns = { ...(latest.lastRuns || {}), [runKey]: { at: Date.now(), assetGroup, timeframe: job.timeframe === "NEW_COIN" ? config.newCoins.timeframe : job.timeframe, trigger: "schedule", status: "ERROR", errors: 1 } };
         await saveAutomationState(automationStatePath, latest);
+        failures.push({ key: job.key, label: scheduledJobLabel(job), errors: 1 });
+        completedKeys.push(job.key);
         console.error(`Automation ${job.timeframe}: ${error.message}`);
       }
     }
-    if (reports.length) {
-      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, formatScheduledBatchReport(reports, settings));
+
+    const hasBatch = reports.length > 0 || failures.length > 0;
+    const beforeSend = await loadAutomationState(automationStatePath);
+    beforeSend.lastSlots = { ...(beforeSend.lastSlots || {}) };
+    for (const key of completedKeys) beforeSend.lastSlots[key] = slot;
+
+    if (!hasBatch) {
+      // Jobs such as Stock on a market holiday can intentionally produce no
+      // report. Mark the slot complete so scheduler polling/restarts cannot
+      // execute the same closed candle again.
+      await saveAutomationState(automationStatePath, beforeSend);
+      return;
+    }
+
+    beforeSend.batchSlots = {
+      ...(beforeSend.batchSlots || {}),
+      [slot]: { status: "sending", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length }
+    };
+    await saveAutomationState(automationStatePath, beforeSend);
+
+    try {
+      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, formatScheduledBatchReport(reports, settings, new Date(), failures));
       const latest = await loadAutomationState(automationStatePath);
-      latest.sentKeys = [...new Set([...(latest.sentKeys || []), ...scheduledSentKeys])];
+      latest.sentKeys = [...new Set(sharedSentKeys)];
+      latest.lastSlots = { ...(latest.lastSlots || {}) };
+      for (const key of completedKeys) latest.lastSlots[key] = slot;
+      latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "sent", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length } };
       await saveAutomationState(automationStatePath, latest);
+    } catch (error) {
+      // Keep the slot consumed. We do not retry a possibly-delivered Telegram
+      // batch after a restart, which enforces the project's no-duplicate policy.
+      const latest = await loadAutomationState(automationStatePath);
+      latest.lastSlots = { ...(latest.lastSlots || {}) };
+      for (const key of completedKeys) latest.lastSlots[key] = slot;
+      latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "failed-send", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length } };
+      await saveAutomationState(automationStatePath, latest);
+      console.error(`Automation batch ${slot}: ${error.message}`);
     }
   } finally { schedulerBusy = false; }
 }
@@ -568,7 +726,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (authenticated && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && !isSameOrigin(req)) return json(res, 403, { error: "Yêu cầu thay đổi không cùng nguồn" });
 
-    if (url.pathname === "/api/config") return json(res, 200, { ...config, app: { name: "Trading Signal", version: packageInfo.version }, capabilities: { dexWeekly: Boolean(process.env.COINGECKO_API_KEY), telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN), metals: true, metalsAutomation: true, stocks: false } });
+    if (url.pathname === "/api/config") return json(res, 200, { ...config, app: { name: "Trading Signal", version: packageInfo.version }, capabilities: { dexWeekly: Boolean(process.env.COINGECKO_API_KEY), telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN), metals: true, metalsAutomation: true, stocks: true } });
     if (url.pathname === "/api/dex/pools" && req.method === "GET") {
       const [token] = parseDexTokens([{
         network: url.searchParams.get("network"),
@@ -593,6 +751,7 @@ const server = http.createServer(async (req, res) => {
       const hasCex = candidate.assets.cex.enabled && candidate.assets.cex.watchlist.length;
       const hasDex = candidate.assets.dex.enabled && candidate.assets.dex.watchlist.length;
       const hasMetals = candidate.assets.metals.enabled && candidate.schedules.metalsDaily.enabled;
+      const hasStocks = candidate.assets.stocks.enabled && candidate.schedules.stockDaily.enabled;
       const hasDexAlertSchedule = candidate.schedules.dex4h.enabled || candidate.schedules.dex8h.enabled;
       if (candidate.enabled && hasDexAlertSchedule && !candidate.assets.dex.enabled) return json(res, 400, { error: "Cần bật watchlist DEX trước khi bật lịch DEX 4H/8H" });
       if (candidate.enabled && hasDexAlertSchedule) {
@@ -602,7 +761,9 @@ const server = http.createServer(async (req, res) => {
       const newCoins = await loadNewCoinList(newCoinPath);
       const hasNewCoins = candidate.schedules.newCoinScan.enabled && activeNewCoinItems(newCoins.items).length;
       if (candidate.enabled && candidate.schedules.metalsDaily.enabled && !candidate.assets.metals.enabled) return json(res, 400, { error: "Cần bật tài sản Vàng–Bạc trước khi bật lịch SELL D1" });
-      if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins && !hasMetals) return json(res, 400, { error: "Cần bật ít nhất một nhóm CEX, DEX, Coin mới hoặc Vàng–Bạc" });
+      if (candidate.enabled && candidate.schedules.stockDaily.enabled && !candidate.assets.stocks.enabled) return json(res, 400, { error: "Cần bật Stock trước khi bật lịch Stock D1" });
+      if (candidate.enabled && candidate.assets.stocks.enabled && !(candidate.assets.stocks.scopes || []).length) return json(res, 400, { error: "Cần chọn ít nhất một phạm vi Stock automation" });
+      if (candidate.enabled && !hasCex && !hasDex && !hasNewCoins && !hasMetals && !hasStocks) return json(res, 400, { error: "Cần bật ít nhất một nhóm CEX, DEX, Coin mới, Vàng–Bạc hoặc Stock" });
       const settings = effectiveAutomation(await saveAutomation(automationPath, normalized));
       return json(res, 200, { settings, saved: true });
     }
@@ -627,6 +788,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/automation/metals/run" && req.method === "POST") {
       return json(res, 200, await runMetalsAutomation("manual"));
+    }
+    if (url.pathname === "/api/automation/stocks/run" && req.method === "POST") {
+      return json(res, 200, await runStocksAutomation("manual"));
     }
     if (url.pathname === "/api/focus" && req.method === "GET") {
       const data = await loadFocusList(focusPath, Date.now(), config.focus);
@@ -672,6 +836,141 @@ const server = http.createServer(async (req, res) => {
       } catch (error) {
         console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "metals:latest", error: error.message }));
         return json(res, 503, { error: "Không thể đọc Metals Data Collector; chi tiết đã được ghi vào log" });
+      }
+    }
+    if (url.pathname === "/api/stocks/symbols" && req.method === "GET") {
+      try {
+        return json(res, 200, { symbols: await fetchStockSymbols(stocksApi) });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:symbols", error: error.message }));
+        return json(res, 503, { error: "Không thể đọc Stocks Data Collector" });
+      }
+    }
+    if (url.pathname === "/api/stocks/instruments" && req.method === "POST") {
+      try {
+        const request = await readJsonBody(req);
+        const symbols = parseStockSymbolList(request.symbols ?? request.symbol);
+        if (!symbols.length) return json(res, 400, { error: "Danh sách mã chứng khoán đang trống" });
+        if (symbols.length > 100) return json(res, 400, { error: "Mỗi lần chỉ thêm tối đa 100 mã" });
+        const years = Math.min(Math.max(Number(request.years) || 3, 1), 10);
+        const current = await fetchStockSymbols(stocksApi);
+        const active = new Set(current.map(item => item.symbol));
+        const skipped = symbols.filter(symbol => active.has(symbol));
+        const pending = symbols.filter(symbol => !active.has(symbol));
+        const added = [];
+        const failed = [];
+        for (const symbol of pending) {
+          try {
+            const result = await addStockInstrument(symbol, years, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
+            added.push({ symbol, instrument: result.instrument, backfill: result.backfill });
+          } catch (error) {
+            console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:add:item", symbol, error: error.message }));
+            failed.push({ symbol, error: error.message });
+          }
+        }
+        return json(res, failed.length ? 207 : 201, { requested: symbols.length, added, skipped, failed });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:add", error: error.message }));
+        return json(res, 400, { error: error.message });
+      }
+    }
+    if (url.pathname === "/api/stocks/instruments" && req.method === "DELETE") {
+      try {
+        const symbol = normalizeStockSymbol(url.searchParams.get("symbol"));
+        const result = await removeStockInstrument(symbol, stocksApi);
+        const settings = await loadAutomation(automationPath);
+        const current = settings.assets?.stocks?.watchlist || [];
+        const watchlist = current.filter(item => String(item).toUpperCase() !== symbol);
+        await saveAutomation(automationPath, {
+          ...settings,
+          assets: { ...settings.assets, stocks: { ...settings.assets.stocks, watchlist } }
+        });
+        return json(res, 200, { ...result, watchlistRemoved: current.length !== watchlist.length });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:remove", error: error.message }));
+        return json(res, 400, { error: error.message });
+      }
+    }
+    if (url.pathname === "/api/stocks/groups" && req.method === "GET") {
+      try {
+        const groups = await fetchStockUniverseGroups(stocksApi);
+        return json(res, 200, { groups });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:groups", error: error.message }));
+        return json(res, 503, { error: "Không thể tải nhóm quét chứng khoán" });
+      }
+    }
+    if (url.pathname === "/api/stocks/watchlist" && req.method === "GET") {
+      const settings = effectiveAutomation(await loadAutomation(automationPath));
+      return json(res, 200, { symbols: settings.assets.stocks.watchlist });
+    }
+    if (url.pathname === "/api/stocks/watchlist" && req.method === "PUT") {
+      const request = await readJsonBody(req);
+      const requested = [...new Set((Array.isArray(request.symbols) ? request.symbols : []).map(normalizeStockSymbol))].slice(0, 1000);
+      const catalog = await fetchStockSymbols(stocksApi);
+      const allowed = new Set(catalog.map(item => item.symbol));
+      const unknown = requested.filter(symbol => !allowed.has(symbol));
+      if (unknown.length) return json(res, 400, { error: `Mã chưa có trong Stocks Data Collector: ${unknown.join(", ")}` });
+      const settings = await loadAutomation(automationPath);
+      const saved = await saveAutomation(automationPath, {
+        ...settings, assets: { ...settings.assets, stocks: { ...settings.assets.stocks, watchlist: requested, provider: "SSI" } }
+      });
+      return json(res, 200, { symbols: saved.assets.stocks.watchlist, saved: true });
+    }
+    if (url.pathname === "/api/scan/stocks" && req.method === "POST") {
+      const request = await readJsonBody(req);
+      const settings = effectiveAutomation(await loadAutomation(automationPath));
+      const scope = String(request.scope || "WATCHLIST").trim().toUpperCase();
+      let symbols;
+      let scopeInfo = { scope: "WATCHLIST", total: settings.assets.stocks.watchlist.length, preparedCount: settings.assets.stocks.watchlist.length, missingCount: 0 };
+      if (scope === "WATCHLIST") {
+        symbols = [...new Set((Array.isArray(request.symbols) && request.symbols.length ? request.symbols : settings.assets.stocks.watchlist).map(normalizeStockSymbol))];
+      } else {
+        const groups = await fetchStockUniverseGroups(stocksApi);
+        const group = groups.find(item => item.group === scope);
+        if (!group) return json(res, 400, { error: `Nhóm quét Stock không hợp lệ: ${scope}` });
+        symbols = group.prepared.map(item => item.symbol);
+        scopeInfo = { scope, total: group.total, preparedCount: group.preparedCount, missingCount: group.missingCount, provider: group.provider };
+      }
+      if (!symbols.length) return json(res, 400, { error: scope === "WATCHLIST" ? "Watchlist chứng khoán đang trống" : `Nhóm ${scope} chưa có mã nào được chuẩn bị dữ liệu` });
+      const results = await scanStocks(symbols);
+      logScanErrors(`stocks:1D:manual:${scope}`, results);
+      return json(res, 200, { generatedAt: Date.now(), timeframe: "1D", closedBarsOnly: true, scope: scopeInfo, results });
+    }
+    if (url.pathname === "/api/stocks/overview" && req.method === "GET") {
+      try {
+        const symbols = await fetchStockSymbols(stocksApi);
+        const rows = await Promise.all(symbols.map(async meta => {
+          try {
+            const market = await fetchStockCandles(meta.symbol, 20, stocksApi);
+            return { ...meta, ...summarizeStockCandles(market.candles), provider: market.provider };
+          } catch (error) {
+            console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:overview:item", symbol: meta.symbol, error: error.message }));
+            return { ...meta, close: null, previousClose: null, changePercent: null, openTime: null, volume: null, provider: "database", dataError: true };
+          }
+        }));
+        return json(res, 200, { rows, count: rows.length });
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:overview", error: error.message }));
+        return json(res, 503, { error: "Không thể tải tổng quan Chứng khoán Việt Nam" });
+      }
+    }
+    if (url.pathname === "/api/chart/stocks" && req.method === "GET") {
+      const symbol = normalizeStockSymbol(url.searchParams.get("symbol"));
+      const timeframe = ["1D", "1W"].includes(url.searchParams.get("timeframe")) ? url.searchParams.get("timeframe") : "1D";
+      const requestedLimit = Number(url.searchParams.get("limit") || config.stocks.chartCandles);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 100), 1000) : config.stocks.chartCandles;
+      try {
+        const market = await fetchStockCandles(symbol, limit, stocksApi);
+        if (market.candles.length < 100) return json(res, 503, { error: `Không đủ dữ liệu ${symbol}: chỉ có ${market.candles.length} nến D1` });
+        const symbols = await fetchStockSymbols(stocksApi);
+        const meta = symbols.find(item => item.symbol === symbol) || { symbol, exchange: "VN", name: symbol };
+        const payload = chartPayload(market.candles, { asset: symbol, exchange: meta.exchange, instrumentId: symbol, quote: "VND" }, timeframe);
+        payload.market = { ...payload.market, name: meta.name, currency: "VND", provider: market.provider, assetType: "STOCK" };
+        return json(res, 200, payload);
+      } catch (error) {
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:chart", symbol, error: error.message }));
+        return json(res, /không hợp lệ/.test(error.message) ? 400 : 503, { error: /không hợp lệ/.test(error.message) ? error.message : "Không thể tải nến từ Stocks Data Collector" });
       }
     }
     if (url.pathname === "/api/chart/metals" && req.method === "GET") {

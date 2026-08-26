@@ -1,5 +1,46 @@
 # Changelog
 
+## v3.3.0 — 2026-08-26
+- Release VN Stock support: SSI/Vnstock data layer, PostgreSQL, dynamic universe, chart, watchlist and scanners.
+- Add Stock D1 automation at 07:00 using latest closed D1 candle.
+- Add Stock Telegram batching/dedup/restart hardening.
+- Add multi-symbol and `.txt` stock preparation.
+- Final UX: Stock tab defaults to Watchlist; compact Telegram batch headings.
+- Full regression: 152/152 Trading Signal tests PASS; 40/40 Stocks Data Collector tests PASS.
+
+## v3.3.0-dev.9 — UX patch before full regression
+- Stock tab defaults to Watchlist-only display after reload.
+- Add an explicit `Tất cả mã đã chuẩn bị` view for the PostgreSQL Stock universe.
+- Telegram scheduled batch prints `Trading Signal` only once in the batch header.
+- Compact batch section labels to COIN / VÀNG & BẠC / CHỨNG KHOÁN / DEX / COIN MỚI.
+
+## v3.3.0-dev.8 — DEV 3 / Part 2 Patch 2
+- Set default Stock D1 automation time to 07:00 for pre-market preparation.
+- Manual and scheduled Stock D1 now share the same rule: scan the latest closed D1 candle.
+- Remove scheduled Stock skip when Daily Sync fetches zero new candles.
+- Migrate legacy default 15:30 to 07:00 while preserving custom Stock schedule times.
+
+## v3.3.0-dev.7 — DEV 3 / Part 2 Patch 1
+- Show Stock scheduler runtime states: RUNNING / OK / SKIPPED / ERROR.
+- Explain no-fresh-D1 scheduled skips instead of looking like Stock did not run.
+- Add Stock automation watchlist textarea and `.txt` import directly in Automation.
+- Keep the VN Stock tab and Automation tab on the same persisted Stock watchlist.
+- Add `Chuẩn bị mã thiếu + backfill` directly in Automation so Stock setup does not require tab switching.
+
+## v3.3.0-dev.6 — DEV 3 / Part 2
+- Harden shared scheduled Telegram batching.
+- Share dedup keys across jobs in the same scheduler slot.
+- Persist batch slot state to prevent duplicate replay after restart.
+- Isolate failed automation groups while keeping successful groups in the batch.
+- Keep technical error details out of Telegram.
+
+## v3.3.0-dev.5 — DEV 3 / Part 1
+- Add VN Stock D1 automation with Daily Sync before scan.
+- Add Stock automation scopes and 15:30 weekday scheduler.
+- Add manual Stock Telegram run and unified scheduled batching.
+- Skip scheduled Stock scan when no fresh D1 candle exists.
+- Add `.txt` import for bulk Stock symbols.
+
 ## 3.2.0 - 2026-08-22
 
 - Phát hành chính thức thị trường **Vàng & Bạc**, đọc dữ liệu duy nhất qua API nội bộ của `metals-data-collector v0.3.1`.
