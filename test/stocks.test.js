@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addStockInstrument, fetchStockCandles, fetchStockSymbols, normalizeStockCandles, normalizeStockSymbol, parseStockSymbolList, removeStockInstrument, summarizeStockCandles, syncStockDaily } from "../lib/stocks.js";
+import { addStockInstrument, classifyStockPrepareResult, fetchStockCandles, fetchStockSymbols, normalizeStockCandles, normalizeStockSymbol, parseStockSymbolList, removeStockInstrument, summarizeStockCandles, syncStockDaily } from "../lib/stocks.js";
 
 test("normalizeStockSymbol validates VN stock symbols", () => {
   assert.equal(normalizeStockSymbol(" fpt "), "FPT");
@@ -84,4 +84,11 @@ test("syncStockDaily asks collector to sync only requested prepared symbols", as
   assert.equal(result.results.length, 2);
   assert.equal(request.options.method, "POST");
   assert.match(request.url, /admin\/sync\/daily\?symbols=FPT%2CMBB$/);
+});
+
+
+test("stock prepare classification retries active symbols with incomplete history", () => {
+  assert.equal(classifyStockPrepareResult({ backfill: { skipped: true } }, true), "prepared");
+  assert.equal(classifyStockPrepareResult({ backfill: { skipped: false } }, true), "retried");
+  assert.equal(classifyStockPrepareResult({ backfill: { skipped: false } }, false), "added");
 });

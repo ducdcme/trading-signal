@@ -324,16 +324,17 @@ $("#addStock").addEventListener("click", async () => {
     const response = await fetch("/api/stocks/instruments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbols: raw, years: 3 }) });
     const data = await response.json();
     if (!response.ok && response.status !== 207) throw new Error(data.error || `HTTP ${response.status}`);
-    if (data.added?.length || data.skipped?.length) {
+    if (data.added?.length || data.prepared?.length || data.retried?.length || data.skipped?.length) {
       input.value = "";
       stocksPayload = null;
       await loadStocks();
     }
     const added = data.added?.length || 0;
-    const skipped = data.skipped?.length || 0;
+    const prepared = data.prepared?.length ?? data.skipped?.length ?? 0;
+    const retried = data.retried?.length || 0;
     const failed = data.failed?.length || 0;
     const failedText = failed ? ` · lỗi ${failed}: ${data.failed.map(item => item.symbol).join(", ")}` : "";
-    $("#stockState").textContent = `Xong ${data.requested || estimated.length} mã · thêm ${added} · đã có ${skipped}${failedText}.`;
+    $("#stockState").textContent = `Xong ${data.requested || estimated.length} mã · thêm mới ${added} · đã chuẩn bị ${prepared} · backfill lại ${retried}${failedText}.`;
   } catch (error) { $("#stockState").textContent = `Lỗi thêm danh sách: ${error.message}`; }
   finally { button.disabled = false; }
 });
@@ -886,9 +887,10 @@ $("#prepareAutoStocks").addEventListener("click", async event => {
     const data = await response.json();
     if (!response.ok && response.status !== 207) throw new Error(data.error || `HTTP ${response.status}`);
     const added = data.added?.length || 0;
-    const skipped = data.skipped?.length || 0;
+    const prepared = data.prepared?.length ?? data.skipped?.length ?? 0;
+    const retried = data.retried?.length || 0;
     const failed = data.failed?.length || 0;
-    $("#autoStockPrepareState").textContent = `Chuẩn bị xong · thêm ${added} · đã có ${skipped} · lỗi ${failed}${failed ? ` (${data.failed.map(item => item.symbol).join(", ")})` : ""}.`;
+    $("#autoStockPrepareState").textContent = `Chuẩn bị xong · thêm mới ${added} · đã chuẩn bị ${prepared} · backfill lại ${retried} · lỗi ${failed}${failed ? ` (${data.failed.map(item => item.symbol).join(", ")})` : ""}.`;
   } catch (error) { $("#autoStockPrepareState").textContent = `Lỗi chuẩn bị Stock: ${error.message}`; }
   finally { button.disabled = false; }
 });

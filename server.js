@@ -28,7 +28,7 @@ import { dueAutomationJobs, normalizeAutomationRuntimeConfig } from "./lib/autom
 import { formatAutomationReport, formatScheduledBatchReport } from "./lib/automation-report.js";
 import { assertPinnedDexAlertTokens } from "./lib/dex-alerts.js";
 import { buildMetalComparison, fetchMetalCandles, fetchMetalsLatest, METAL_ALERT_PRODUCTS, METAL_PRODUCTS } from "./lib/metals.js";
-import { addStockInstrument, fetchStockCandles, fetchStockSymbols, fetchStockUniverseGroups, normalizeStockSymbol, parseStockSymbolList, removeStockInstrument, summarizeStockCandles, syncStockDaily } from "./lib/stocks.js";
+import { addStockInstrument, classifyStockPrepareResult, fetchStockCandles, fetchStockSymbols, fetchStockUniverseGroups, normalizeStockSymbol, parseStockSymbolList, removeStockInstrument, summarizeStockCandles, syncStockDaily } from "./lib/stocks.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadEnvFile(join(root, ".env"));
@@ -855,20 +855,31 @@ const server = http.createServer(async (req, res) => {
         const years = Math.min(Math.max(Number(request.years) || 3, 1), 10);
         const current = await fetchStockSymbols(stocksApi);
         const active = new Set(current.map(item => item.symbol));
-        const skipped = symbols.filter(symbol => active.has(symbol));
-        const pending = symbols.filter(symbol => !active.has(symbol));
         const added = [];
+        const prepared = [];
+        const retried = [];
         const failed = [];
-        for (const symbol of pending) {
+        // Always ask the collector to prepare every requested symbol.
+        // stocks-data-collector v0.2.1 Smart Backfill is authoritative:
+        // - complete coverage => backfill.skipped=true and no provider data request
+        // - incomplete/empty coverage => fetch only the missing range
+        // This also repairs legacy active instruments whose first backfill timed out.
+        for (const symbol of symbols) {
           try {
+            const wasActive = active.has(symbol);
             const result = await addStockInstrument(symbol, years, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
-            added.push({ symbol, instrument: result.instrument, backfill: result.backfill });
+            const row = { symbol, instrument: result.instrument, backfill: result.backfill };
+            const classification = classifyStockPrepareResult(result, wasActive);
+            if (classification === "prepared") prepared.push(row);
+            else if (classification === "retried") retried.push(row);
+            else added.push(row);
           } catch (error) {
             console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:add:item", symbol, error: error.message }));
             failed.push({ symbol, error: error.message });
           }
         }
-        return json(res, failed.length ? 207 : 201, { requested: symbols.length, added, skipped, failed });
+        // `skipped` remains as a backward-compatible alias for clients from v3.3.0.
+        return json(res, failed.length ? 207 : 201, { requested: symbols.length, added, prepared, retried, skipped: prepared, failed });
       } catch (error) {
         console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:add", error: error.message }));
         return json(res, 400, { error: error.message });

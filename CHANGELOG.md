@@ -1,3 +1,10 @@
+# v3.3.1
+
+- Fix VN Stock bulk prepare: active symbols are no longer assumed to have complete candle history.
+- Delegate every requested Stock symbol to collector Smart Backfill.
+- Show added / already prepared / backfilled again / failed counts in Stock and Automation UI.
+- Recommended with stocks-data-collector v0.2.1.
+
 # Changelog
 
 ## v3.3.0 — 2026-08-26
