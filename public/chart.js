@@ -11,6 +11,8 @@ import { buildSmcLayers } from "./smc.js";
 import { distanceBetweenPointers, midpointBetweenPointers, pinchBarCount, plotAnchorRatio } from "./chart-gestures.js";
 import { chartReturnUrl, normalizeAppTab } from "./navigation-state.js";
 import { mergeDexChartItems, readManualDexItems } from "./dex-workspace.js";
+import { replayCandles, replayIndexFromCanvasX, stepReplayIndex } from "./chart-replay.js";
+import { createDefaultPosition, pointInPosition, positionOutcome, positionRiskReward, setPositionEnd, setPositionLevel, translatePosition } from "./chart-position.js";
 
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
@@ -66,6 +68,16 @@ let pendingDexToken = null;
 let quotesByKey = new Map();
 let quoteTimer = null;
 let loadSequence = 0;
+let replaySelecting = false;
+let replayCursorIndex = null;
+let positionTool = null;
+let positionDraft = null;
+let positionDrag = null;
+let hoveredPositionPart = null;
+let hoveredPositionId = null;
+let replayPositions = [];
+let selectedPositionId = null;
+let nextPositionId = 1;
 
 const canvas = $("#chart");
 const context = canvas.getContext("2d");
@@ -100,7 +112,10 @@ function readSmcPreferences() {
     const legacy = current ? null : JSON.parse(localStorage.getItem(legacySmcPreferencesKey) || "null");
     const saved = current || legacy;
     for (const id of smcControlIds) if (typeof saved?.[id] === "boolean") $(`#${id}`).checked = saved[id];
-    if (!current) $(`#showEqualLevels`).checked = true;
+    // Bar Replay FINAL: Order Block is enabled by default on every chart load.
+    // The user can still turn it off manually for the current session.
+    $("#showOrderBlocks").checked = true;
+    if (!current) $("#showEqualLevels").checked = true;
     if (legacy) saveSmcPreferences();
   } catch { /* dùng mặc định trên giao diện */ }
 }
@@ -324,6 +339,72 @@ function selectMetalChartItem(item) {
   load();
 }
 
+function replayActive() { return Number.isInteger(replayCursorIndex); }
+function chartCandles() { return replayActive() ? replayCandles(payload?.candles || [], replayCursorIndex) : (payload?.candles || []); }
+function rebuildSmcLayers() { smcLayers = buildSmcLayers(chartCandles()); }
+function replayViewportStart() {
+  return layout?.startIndex ?? Math.max(0, chartCandles().length + futureBarCount - rightOffset - visibleBarCount);
+}
+function restoreReplayViewportStart(startIndex) {
+  const virtualLength = chartCandles().length + futureBarCount;
+  rightOffset = clampRightOffset(virtualLength - startIndex - visibleBarCount);
+}
+function cancelPositionTool() {
+  positionTool = null;
+  positionDraft = null;
+  canvas.classList.remove("measuring-chart");
+  updateReplayControls();
+}
+function positionToolPrompt() {
+  if (!positionTool) return "";
+  return `${positionTool === "LONG" ? "Long" : "Short"}: click chart để đặt vị thế`;
+}
+function updateReplayControls() {
+  const active = replayActive();
+  const selecting = replaySelecting && !active;
+  const toggle = $("#replayToggle");
+  toggle.textContent = selecting ? "Chọn nến…" : active ? "Replay đang chạy" : "Bar Replay";
+  toggle.classList.toggle("replay-selecting", selecting);
+  toggle.classList.toggle("replay-active", active);
+  for (const id of ["replayPrev", "replayNext", "replayStatus", "replayLong", "replayShort", "replayDeletePosition", "replayExit"]) $(`#${id}`).hidden = !active;
+  $("#replayLong").classList.toggle("position-active", positionTool === "LONG");
+  $("#replayShort").classList.toggle("position-active", positionTool === "SHORT");
+  $("#replayDeletePosition").disabled = selectedPositionId == null;
+  const prompt = positionToolPrompt();
+  $("#positionToolStatus").hidden = !active || !prompt;
+  $("#positionToolStatus").textContent = prompt;
+  if (!active || !payload?.candles?.length) return;
+  const candle = payload.candles[replayCursorIndex];
+  $("#replayStatus").textContent = `${replayCursorIndex + 1}/${payload.candles.length} · ${formatDate(candle.openTime).replace(", ", " ")}`;
+  $("#replayPrev").disabled = replayCursorIndex <= 0;
+  $("#replayNext").disabled = replayCursorIndex >= payload.candles.length - 1;
+}
+function enterReplay(index) {
+  if (!payload?.candles?.length) return;
+  const viewportStart = replayViewportStart();
+  replaySelecting = false;
+  replayCursorIndex = Math.min(payload.candles.length - 1, Math.max(0, index));
+  measurement = null; crosshair = null;
+  restoreReplayViewportStart(viewportStart);
+  rebuildSmcLayers(); updateReplayControls(); draw();
+}
+function exitReplay() {
+  const viewportStart = replayViewportStart();
+  replaySelecting = false; replayCursorIndex = null; measurement = null; crosshair = null;
+  cancelPositionTool();
+  restoreReplayViewportStart(viewportStart);
+  rebuildSmcLayers(); updateReplayControls(); draw();
+}
+function stepReplay(delta) {
+  if (!replayActive() || !payload?.candles?.length) return;
+  const next = stepReplayIndex(replayCursorIndex, delta, payload.candles.length);
+  if (next === replayCursorIndex) return;
+  const viewportStart = replayViewportStart();
+  replayCursorIndex = next; measurement = null; crosshair = null;
+  restoreReplayViewportStart(viewportStart);
+  rebuildSmcLayers(); updateReplayControls(); draw();
+}
+
 function updateYScaleLabel() {
   const automatic = Math.abs(yScaleFactor - 1) < 0.001 && Math.abs(yCenterOffset) < 0.001;
   $("#autoScale").textContent = automatic ? "Trục Y: Tự động" : `Trục Y: ${yScaleFactor.toFixed(2)}×`;
@@ -352,7 +433,7 @@ function trendEmaLine(candles, x, y) {
 }
 
 function rightOffsetBounds(count = visibleBarCount) {
-  const candleCount = payload?.candles.length || 0;
+  const candleCount = chartCandles().length;
   const virtualLength = candleCount + futureBarCount;
   const maximumFutureBars = Math.max(futureBarCount, Math.floor(count / 2));
   return {
@@ -367,7 +448,7 @@ function clampRightOffset(value, count = visibleBarCount) {
 }
 
 function setVisibleBarCount(count, anchorRatio = 0.5) {
-  const available = (payload?.candles.length || 500) + futureBarCount;
+  const available = (payload ? chartCandles().length : 500) + futureBarCount;
   const previousCount = visibleBarCount;
   const previousStart = Math.max(0, available - rightOffset - previousCount);
   const anchorIndex = previousStart + previousCount * anchorRatio;
@@ -599,9 +680,10 @@ function drawCrosshair() {
   const slotIndex = Math.min(visibleBarCount - 1, Math.max(0, Math.floor((pointerX - margin.left) / step)));
   const lineX = margin.left + (slotIndex + 0.5) * step;
   const virtualIndex = startIndex + slotIndex;
-  const lastCandle = payload.candles.at(-1);
-  const candle = payload.candles[virtualIndex];
-  const time = candle?.openTime ?? (lastCandle?.openTime + (virtualIndex - payload.candles.length + 1) * timeframeMs());
+  const activeCandles = chartCandles();
+  const lastCandle = activeCandles.at(-1);
+  const candle = activeCandles[virtualIndex];
+  const time = candle?.openTime ?? (lastCandle?.openTime + (virtualIndex - activeCandles.length + 1) * timeframeMs());
   const price = max - (pointerY - margin.top) / plotHeight * (max - min);
 
   context.save();
@@ -680,18 +762,250 @@ function drawMeasurement() {
   context.restore();
 }
 
+function togglePositionTool(side) {
+  if (!replayActive()) return;
+  if (positionTool === side) { cancelPositionTool(); draw(); return; }
+  positionTool = side;
+  positionDraft = null;
+  selectedPositionId = null;
+  measurement = null;
+  crosshair = null;
+  updateReplayControls();
+  draw();
+}
+
+function deleteSelectedPosition() {
+  if (selectedPositionId == null) return;
+  replayPositions = replayPositions.filter(position => position.id !== selectedPositionId);
+  selectedPositionId = null;
+  updateReplayControls();
+  draw();
+}
+
+function placePosition(point) {
+  if (!positionTool || !replayActive() || !point || !layout) return false;
+  const riskSize = Math.max(Number.EPSILON, (layout.max - layout.min) * 0.07);
+  const position = createDefaultPosition({
+    id: nextPositionId++,
+    side: positionTool,
+    point,
+    riskSize,
+    rewardRisk: 2,
+    widthBars: Math.max(8, Math.min(18, visibleBarCount * 0.10)),
+    createdAtIndex: replayCursorIndex
+  });
+  if (position) {
+    replayPositions.push(position);
+    selectedPositionId = position.id;
+  }
+  positionTool = null;
+  updateReplayControls();
+  draw();
+  return true;
+}
+
+function positionCanvasGeometry(position) {
+  const toCanvas = point => measurementPointToCanvas(point, layout);
+  const start = toCanvas({ virtualIndex: position.startIndex, price: position.entry });
+  const end = toCanvas({ virtualIndex: position.endIndex, price: position.entry });
+  const targetY = toCanvas({ virtualIndex: position.startIndex, price: position.target }).y;
+  const stopY = toCanvas({ virtualIndex: position.startIndex, price: position.stop }).y;
+  return { x1: Math.min(start.x, end.x), x2: Math.max(start.x, end.x), entryY: start.y, targetY, stopY };
+}
+
+function hitTestPositionCanvas(x, y) {
+  if (!layout) return null;
+  const tolerance = 8;
+  for (const position of [...replayPositions].reverse()) {
+    const g = positionCanvasGeometry(position);
+    if (x < g.x1 - tolerance || x > g.x2 + tolerance) continue;
+    const top = Math.min(g.targetY, g.stopY), bottom = Math.max(g.targetY, g.stopY);
+    if (Math.abs(x - g.x2) <= tolerance && y >= top - tolerance && y <= bottom + tolerance) return { position, part: "resize-x" };
+    if (Math.abs(y - g.targetY) <= tolerance) return { position, part: "target" };
+    if (Math.abs(y - g.stopY) <= tolerance) return { position, part: "stop" };
+    if (y >= top && y <= bottom) return { position, part: "move" };
+  }
+  return null;
+}
+
+function beginPositionDrag(hit, point) {
+  if (!hit || !point) return false;
+  selectedPositionId = hit.position.id;
+  positionDrag = { id: hit.position.id, part: hit.part, startPoint: point, original: { ...hit.position } };
+  hoveredPositionPart = hit.part;
+  updateReplayControls();
+  canvas.classList.add("position-dragging");
+  draw();
+  return true;
+}
+
+function updatePositionDrag(point) {
+  if (!positionDrag || !point) return;
+  const index = replayPositions.findIndex(position => position.id === positionDrag.id);
+  if (index < 0) return;
+  let next = positionDrag.original;
+  if (positionDrag.part === "target" || positionDrag.part === "stop") {
+    next = setPositionLevel(positionDrag.original, positionDrag.part, point.price);
+  } else if (positionDrag.part === "resize-x") {
+    next = setPositionEnd(positionDrag.original, point.virtualIndex, 2);
+  } else {
+    next = translatePosition(
+      positionDrag.original,
+      point.virtualIndex - positionDrag.startPoint.virtualIndex,
+      point.price - positionDrag.startPoint.price,
+      payload?.candles?.length || Infinity
+    );
+  }
+  replayPositions[index] = next;
+  draw();
+}
+
+function selectPositionAtPoint(point) {
+  const selected = [...replayPositions].reverse().find(position => pointInPosition(position, point));
+  const nextId = selected?.id ?? null;
+  if (nextId === selectedPositionId) return Boolean(selected);
+  selectedPositionId = nextId;
+  updateReplayControls();
+  draw();
+  return Boolean(selected);
+}
+
+function drawPositionExitArrow(x1, entryY, exitX, exitY, color) {
+  const dx = exitX - x1, dy = exitY - entryY;
+  if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+  context.save();
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  context.lineWidth = 1.5;
+  context.setLineDash([7, 7]);
+  context.beginPath();
+  context.moveTo(x1 + 3, entryY);
+  context.lineTo(exitX, exitY);
+  context.stroke();
+  context.setLineDash([]);
+  const angle = Math.atan2(dy, dx);
+  const size = 7;
+  context.beginPath();
+  context.moveTo(exitX, exitY);
+  context.lineTo(exitX - size * Math.cos(angle - Math.PI / 6), exitY - size * Math.sin(angle - Math.PI / 6));
+  context.lineTo(exitX - size * Math.cos(angle + Math.PI / 6), exitY - size * Math.sin(angle + Math.PI / 6));
+  context.closePath();
+  context.fill();
+  context.restore();
+}
+
+function drawReplayPositions() {
+  if (!layout || !replayPositions.length) return;
+  const throughIndex = replayActive() ? replayCursorIndex : (payload?.candles?.length || 1) - 1;
+  const toCanvas = point => measurementPointToCanvas(point, layout);
+  for (const position of replayPositions) {
+    const result = positionOutcome(position, payload?.candles || [], throughIndex);
+    const closed = (result.status === "WIN" || result.status === "LOSE") && Number.isFinite(result.hitIndex) && Number.isFinite(result.exitPrice);
+    // Keep the user-configured X width editable after TP/SL is hit.
+    // Only the exit marker is pinned to the actual hit bar, TradingView-style.
+    const visualEndIndex = Number(position.endIndex);
+    const start = toCanvas({ virtualIndex: position.startIndex, price: position.entry });
+    const end = toCanvas({ virtualIndex: visualEndIndex, price: position.entry });
+    const targetY = toCanvas({ virtualIndex: position.startIndex, price: position.target }).y;
+    const stopY = toCanvas({ virtualIndex: position.startIndex, price: position.stop }).y;
+    const x1 = Math.max(layout.margin.left, Math.min(start.x, end.x));
+    const x2 = Math.min(layout.width - layout.margin.right, Math.max(start.x, end.x));
+    if (x2 < layout.margin.left || x1 > layout.width - layout.margin.right) continue;
+    const entryY = start.y;
+    context.save();
+    context.globalAlpha = 0.27;
+    context.fillStyle = "#089981";
+    context.fillRect(x1, Math.min(entryY, targetY), Math.max(1, x2 - x1), Math.abs(targetY - entryY));
+    context.fillStyle = "#f23645";
+    context.fillRect(x1, Math.min(entryY, stopY), Math.max(1, x2 - x1), Math.abs(stopY - entryY));
+    context.globalAlpha = 1;
+    const selected = position.id === selectedPositionId;
+    const hovered = position.id === hoveredPositionId;
+    context.lineWidth = 1;
+    context.strokeStyle = "rgba(8,153,129,.55)";
+    context.strokeRect(x1, Math.min(entryY, targetY), Math.max(1, x2 - x1), Math.abs(targetY - entryY));
+    context.strokeStyle = "rgba(242,54,69,.55)";
+    context.strokeRect(x1, Math.min(entryY, stopY), Math.max(1, x2 - x1), Math.abs(stopY - entryY));
+    context.setLineDash([]);
+    context.lineWidth = selected || hovered ? 2 : 1;
+    context.strokeStyle = "#2962ff";
+    context.beginPath(); context.moveTo(x1, entryY); context.lineTo(x2, entryY); context.stroke();
+
+    if (closed) {
+      const exitPoint = toCanvas({ virtualIndex: result.hitIndex, price: result.exitPrice });
+      const exitX = Math.max(layout.margin.left, Math.min(layout.width - layout.margin.right, exitPoint.x));
+      const exitY = result.status === "WIN" ? targetY : stopY;
+      drawPositionExitArrow(x1, entryY, exitX, exitY, result.status === "WIN" ? "rgba(8,153,129,.9)" : "rgba(242,54,69,.9)");
+    }
+
+    if (hovered) {
+      const rr = positionRiskReward(position);
+      const reward = Math.abs(Number(position.target) - Number(position.entry));
+      const risk = Math.abs(Number(position.entry) - Number(position.stop));
+      const rewardPct = Math.abs(Number(position.entry)) > Number.EPSILON ? reward / Math.abs(Number(position.entry)) * 100 : 0;
+      const riskPct = Math.abs(Number(position.entry)) > Number.EPSILON ? risk / Math.abs(Number(position.entry)) * 100 : 0;
+      const status = result.status === "AMBIGUOUS" ? "TP/SL?" : result.status;
+
+      const drawCompactBadge = (text, centerX, anchorY, background) => {
+        context.save();
+        context.font = "600 10px system-ui";
+        context.textBaseline = "middle";
+        const padX = 7, h = 20;
+        const w = Math.ceil(context.measureText(text).width) + padX * 2;
+        // TradingView-style labels are centered on the horizontal midpoint of
+        // the position object and expand evenly to the left and right.
+        let bx = centerX - w / 2;
+        bx = Math.max(layout.margin.left + 2, Math.min(bx, layout.width - layout.margin.right - w - 2));
+        const by = Math.max(layout.margin.top + 2, Math.min(anchorY - h / 2, layout.height - layout.margin.bottom - h - 2));
+        context.fillStyle = background;
+        context.beginPath();
+        context.roundRect(bx, by, w, h, 5);
+        context.fill();
+        context.fillStyle = "#f8fafc";
+        context.textAlign = "center";
+        context.fillText(text, bx + w / 2, by + h / 2 + .5);
+        context.restore();
+      };
+
+      const objectCenterX = (x1 + x2) / 2;
+      // Position each badge outside its own price zone. This works for both
+      // LONG (TP above / SL below Entry) and SHORT (SL above / TP below Entry).
+      const tpBadgeY = targetY < entryY ? targetY - 12 : targetY + 12;
+      const slBadgeY = stopY < entryY ? stopY - 12 : stopY + 12;
+      drawCompactBadge(`TP ${formatPrice(position.target)}  +${formatPrice(reward)} (${rewardPct.toFixed(2)}%)`, objectCenterX, tpBadgeY, "rgba(8,153,129,.96)");
+      drawCompactBadge(`SL ${formatPrice(position.stop)}  -${formatPrice(risk)} (${riskPct.toFixed(2)}%)`, objectCenterX, slBadgeY, "rgba(242,54,69,.96)");
+
+      const centerText = `R:R ${Number.isFinite(rr) ? rr.toFixed(2) : "—"}${status !== "LIVE" ? ` · ${status}` : ""}`;
+      drawCompactBadge(centerText, objectCenterX, (targetY + stopY) / 2, "rgba(15,118,110,.94)");
+    }
+    if (selected || hovered) {
+      context.fillStyle = "rgba(7,20,33,.95)";
+      context.strokeStyle = "#3b82f6";
+      context.lineWidth = 1.5;
+      for (const py of [targetY, stopY]) {
+        context.beginPath(); context.roundRect(x1 - 4, py - 4, 8, 8, 2.5); context.fill(); context.stroke();
+      }
+      const configuredEnd = toCanvas({ virtualIndex: position.endIndex, price: position.entry });
+      const handleX = Math.max(layout.margin.left, Math.min(layout.width - layout.margin.right, configuredEnd.x));
+      context.beginPath(); context.roundRect(handleX - 4, entryY - 6, 8, 12, 2.5); context.fill(); context.stroke();
+    }
+    context.restore();
+  }
+}
+
 function draw() {
   if (!payload) return;
   updateYScaleLabel();
   resizeCanvas();
   const width = canvas.clientWidth, height = canvas.clientHeight;
   context.clearRect(0, 0, width, height);
-  const virtualLength = payload.candles.length + futureBarCount;
+  const activeCandles = chartCandles();
+  const virtualLength = activeCandles.length + futureBarCount;
   const endIndex = Math.max(1, virtualLength - rightOffset);
   const startIndex = Math.max(0, endIndex - visibleBarCount);
   const candleStartIndex = Math.max(0, startIndex);
-  const candleEndIndex = Math.min(payload.candles.length, endIndex);
-  const candles = payload.candles.slice(candleStartIndex, candleEndIndex);
+  const candleEndIndex = Math.min(activeCandles.length, endIndex);
+  const candles = activeCandles.slice(candleStartIndex, candleEndIndex);
   if (!candles.length) return;
   const margin = { top: 36, right: 78, bottom: 42, left: 12 };
   const plotWidth = width - margin.left - margin.right, plotHeight = height - margin.top - margin.bottom;
@@ -717,7 +1031,7 @@ function draw() {
 
   const bodyWidth = Math.max(1, Math.min(9, step * 0.64));
   candles.forEach((candle, index) => {
-    const px = x(index), color = candle.close >= candle.open ? "#22c78d" : "#ff6478";
+    const px = x(index), color = candle.close >= candle.open ? "#089981" : "#f23645";
     context.strokeStyle = color; context.lineWidth = 1; context.beginPath(); context.moveTo(px, y(candle.high)); context.lineTo(px, y(candle.low)); context.stroke();
     const top = y(Math.max(candle.open, candle.close)), bottom = y(Math.min(candle.open, candle.close));
     context.fillStyle = color; context.fillRect(px - bodyWidth / 2, top, bodyWidth, Math.max(1.5, bottom - top));
@@ -735,6 +1049,7 @@ function draw() {
   const labelEvery = Math.max(1, Math.ceil(candles.length / 7));
   context.fillStyle = "#839aaf"; context.textAlign = "center"; context.textBaseline = "top";
   candles.forEach((candle, index) => { if (index % labelEvery === 0 || index === candles.length - 1) context.fillText(formatDate(candle.openTime).replace(", ", " "), x(index), height - margin.bottom + 9); });
+  drawReplayPositions();
   drawMeasurement();
   drawCrosshair();
 }
@@ -742,7 +1057,7 @@ function draw() {
 async function load() {
   const sequence = ++loadSequence;
   const requestedKey = `${exchange}:${symbol}`;
-  rightOffset = 0; yScaleFactor = 1; yCenterOffset = 0; measurement = null; crosshair = null;
+  rightOffset = 0; yScaleFactor = 1; yCenterOffset = 0; measurement = null; crosshair = null; replaySelecting = false; replayCursorIndex = null; positionTool = null; positionDraft = null; positionDrag = null; hoveredPositionPart = null; hoveredPositionId = null; replayPositions = []; selectedPositionId = null; nextPositionId = 1; updateReplayControls();
   $("#chartState").className = "chart-state"; $("#chartState").textContent = "Đang lấy dữ liệu biểu đồ…"; payload = null; layout = null; smcLayers = null; updateSmcTrend();
   document.querySelectorAll("[data-timeframe]").forEach(button => button.classList.toggle("active", button.dataset.timeframe === timeframe));
   try {
@@ -757,7 +1072,7 @@ async function load() {
     const response = await fetch(`${endpoint}?${query}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     if (sequence !== loadSequence) return;
-    payload = data; smcLayers = buildSmcLayers(data.candles); $("#chartState").classList.add("hidden");
+    payload = data; rebuildSmcLayers(); $("#chartState").classList.add("hidden");
     exchange = data.market.exchange; symbol = data.market.instrumentId;
     if (isMetalsChart) {
       metalProduct = data.market.instrumentId;
@@ -811,7 +1126,13 @@ canvas.addEventListener("mousemove", event => {
   if (yScaleDrag || chartDrag || measurement?.placingEnd) return;
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   const insidePlot = x >= layout.margin.left && x < layout.width - layout.margin.right && y >= layout.margin.top && y <= layout.height - layout.margin.bottom;
-  crosshair = insidePlot ? { x, y } : null;
+  const hoverHit = insidePlot && !positionTool ? hitTestPositionCanvas(x, y) : null;
+  hoveredPositionPart = hoverHit?.part || null;
+  hoveredPositionId = hoverHit?.position?.id ?? null;
+  canvas.classList.toggle("position-hover", Boolean(hoverHit));
+  canvas.classList.toggle("position-level-hover", hoverHit?.part === "target" || hoverHit?.part === "stop");
+  canvas.classList.toggle("position-time-hover", hoverHit?.part === "resize-x");
+  crosshair = insidePlot && !hoverHit ? { x, y } : null;
   draw();
 });
 canvas.addEventListener("pointerdown", event => {
@@ -842,6 +1163,25 @@ canvas.addEventListener("pointerdown", event => {
   const rect = canvas.getBoundingClientRect();
   const pointerX = event.clientX - rect.left, pointerY = event.clientY - rect.top;
   const insidePlot = pointerX >= layout.margin.left && pointerX < layout.width - layout.margin.right && pointerY >= layout.margin.top && pointerY <= layout.height - layout.margin.bottom;
+  if (positionTool && insidePlot) {
+    placePosition(measurementPointFromCanvas(pointerX, pointerY, layout));
+    event.preventDefault();
+    return;
+  }
+  if (!positionTool && insidePlot && replayPositions.length) {
+    const hit = hitTestPositionCanvas(pointerX, pointerY);
+    if (hit && beginPositionDrag(hit, measurementPointFromCanvas(pointerX, pointerY, layout))) {
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault(); return;
+    }
+    if (selectedPositionId != null) { selectedPositionId = null; updateReplayControls(); draw(); }
+  }
+  if (replaySelecting && insidePlot) {
+    const index = replayIndexFromCanvasX(pointerX, layout, payload?.candles?.length || 0);
+    if (index != null) enterReplay(index);
+    event.preventDefault();
+    return;
+  }
   if (measurement?.placingEnd && insidePlot) {
     const point = measurementPointFromCanvas(pointerX, pointerY, layout);
     measurement = completeMeasurement(measurement, point);
@@ -877,6 +1217,9 @@ canvas.addEventListener("pointermove", event => {
       const distance = distanceBetweenPointers(first, second);
       setVisibleBarCount(pinchBarCount(pinchGesture.startBarCount, pinchGesture.startDistance, distance), pinchGesture.anchorRatio);
     }
+  } else if (positionDrag) {
+    const rect = canvas.getBoundingClientRect();
+    updatePositionDrag(measurementPointFromCanvas(event.clientX - rect.left, event.clientY - rect.top, layout));
   } else if (measurement?.placingEnd) {
     const rect = canvas.getBoundingClientRect();
     measurement = previewMeasurement(measurement, measurementPointFromCanvas(event.clientX - rect.left, event.clientY - rect.top, layout));
@@ -886,7 +1229,6 @@ canvas.addEventListener("pointermove", event => {
     setYScale(yScaleDrag.startFactor * Math.exp(deltaY * 0.01));
   } else if (chartDrag) {
     const movedBars = Math.round((event.clientX - chartDrag.startX) / chartDrag.step);
-    const virtualLength = payload.candles.length + futureBarCount;
     rightOffset = clampRightOffset(chartDrag.startOffset + movedBars);
     yCenterOffset = chartDrag.startCenterOffset + (event.clientY - chartDrag.startY) / chartDrag.plotHeight * yScaleFactor;
     draw();
@@ -900,8 +1242,9 @@ const finishYScaleDrag = event => {
     return;
   }
   if (pinchGesture) pinchGesture = null;
+  positionDrag = null;
   yScaleDrag = null; chartDrag = null;
-  canvas.classList.remove("dragging-chart", "pinching-chart");
+  canvas.classList.remove("dragging-chart", "pinching-chart", "position-dragging");
   canvas.classList.toggle("measuring-chart", Boolean(measurement?.placingEnd));
   if (event?.pointerId != null && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
 };
@@ -920,12 +1263,15 @@ canvas.addEventListener("wheel", event => {
   const ratio = Math.min(1, Math.max(0, plotX / (layout.width - layout.margin.left - layout.margin.right)));
   setVisibleBarCount(visibleBarCount * Math.exp(event.deltaY * 0.0015), ratio);
 }, { passive: false });
-canvas.addEventListener("mouseleave", () => { crosshair = null; draw(); if (!yScaleDrag) canvas.classList.remove("scaling-y"); });
+canvas.addEventListener("mouseleave", () => { crosshair = null; hoveredPositionPart = null; draw(); if (!yScaleDrag) canvas.classList.remove("scaling-y"); if (!positionDrag) canvas.classList.remove("position-hover", "position-level-hover"); });
 document.addEventListener("keydown", event => {
-  if (event.key !== "Escape" || !measurement) return;
-  measurement = null;
-  canvas.classList.remove("measuring-chart");
-  draw();
+  if (event.key === "ArrowLeft" && replayActive()) { event.preventDefault(); stepReplay(-1); return; }
+  if (event.key === "ArrowRight" && replayActive()) { event.preventDefault(); stepReplay(1); return; }
+  if ((event.key === "Delete" || event.key === "Backspace") && selectedPositionId != null) { event.preventDefault(); deleteSelectedPosition(); return; }
+  if (event.key !== "Escape") return;
+  if (positionTool) { cancelPositionTool(); draw(); return; }
+  if (replaySelecting) { replaySelecting = false; updateReplayControls(); draw(); return; }
+  if (measurement) { measurement = null; canvas.classList.remove("measuring-chart"); draw(); }
 });
 document.querySelectorAll("[data-timeframe]").forEach(button => button.addEventListener("click", () => { timeframe = button.dataset.timeframe; saveChartWorkspace(); load(); }));
 for (const selector of ["#showTrendEma", "#showSignals"]) $(selector).addEventListener("change", draw);
@@ -933,6 +1279,19 @@ for (const id of smcControlIds) $(`#${id}`).addEventListener("change", () => { s
 $("#visibleBars").addEventListener("change", event => { visibleBarCount = Number(event.target.value); rightOffset = 0; resetYScale(); });
 $("#autoScale").addEventListener("click", resetYScale);
 $("#resetView").addEventListener("click", resetView);
+$("#replayToggle").addEventListener("click", () => {
+  if (!payload?.candles?.length) return;
+  if (replayActive()) return;
+  replaySelecting = !replaySelecting;
+  measurement = null; crosshair = null;
+  updateReplayControls(); draw();
+});
+$("#replayPrev").addEventListener("click", () => stepReplay(-1));
+$("#replayNext").addEventListener("click", () => stepReplay(1));
+$("#replayLong").addEventListener("click", () => togglePositionTool("LONG"));
+$("#replayShort").addEventListener("click", () => togglePositionTool("SHORT"));
+$("#replayDeletePosition").addEventListener("click", deleteSelectedPosition);
+$("#replayExit").addEventListener("click", exitReplay);
 new ResizeObserver(draw).observe(canvas);
 $("#chartCoinList").addEventListener("click", event => {
   if (isMetalsChart) {

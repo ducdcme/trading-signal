@@ -219,53 +219,89 @@ async function resolveStockAutomationSymbols(settings) {
 }
 
 async function runStocksAutomation(trigger = "manual", options = {}) {
-  const settings = effectiveAutomation(await loadAutomation(automationPath));
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
-  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
-  if (!settings.assets.stocks.enabled) throw new Error("Cảnh báo Chứng khoán Việt Nam đang tắt");
+  let stage = "settings";
+  let selection = { scopes: [], symbols: [] };
+  let syncRows = [];
+  let freshCandles = 0;
+  try {
+    const settings = effectiveAutomation(await loadAutomation(automationPath));
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+    if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+    if (!settings.assets.stocks.enabled) throw new Error("Cảnh báo Chứng khoán Việt Nam đang tắt");
 
-  const selection = await resolveStockAutomationSymbols(settings);
-  if (!selection.symbols.length) throw new Error("Stock automation chưa có mã prepared để quét");
+    stage = "resolve-symbols";
+    selection = await resolveStockAutomationSymbols(settings);
+    if (!selection.symbols.length) throw new Error("Stock automation chưa có mã prepared để quét");
 
-  const runningState = await loadAutomationState(automationStatePath);
-  runningState.lastRuns = {
-    ...(runningState.lastRuns || {}),
-    "stocks:1D": { at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes, total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, synced: 0, freshCandles: 0, status: "RUNNING" }
-  };
-  await saveAutomationState(automationStatePath, runningState);
+    stage = "state-running";
+    const runningState = await loadAutomationState(automationStatePath);
+    runningState.lastRuns = {
+      ...(runningState.lastRuns || {}),
+      "stocks:1D": { at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes, total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, synced: 0, freshCandles: 0, status: "RUNNING", stage: "daily-sync" }
+    };
+    await saveAutomationState(automationStatePath, runningState);
 
-  const sync = await syncStockDaily(selection.symbols, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
-  const syncRows = Array.isArray(sync?.results) ? sync.results : [];
-  const freshCandles = syncRows.reduce((total, row) => total + Number(row.fetched || 0), 0);
-  const rows = await scanStocks(selection.symbols);
-  const state = await loadAutomationState(automationStatePath);
-  const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, "1D", trigger);
-  logScanErrors("stocks:1D", rows);
-  const errors = rows.filter(row => row.status === "ERROR");
-  const allFailed = rows.length > 0 && errors.length === rows.length;
-  const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
-  const scopeLabel = selection.scopes.join("+");
-  const telegramText = shouldSend ? formatAutomationReport("1D", rows, delivery, settings, trigger, `CHỨNG KHOÁN VN · ${scopeLabel}`) : "";
-  if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
+    stage = "daily-sync";
+    const sync = await syncStockDaily(selection.symbols, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
+    syncRows = Array.isArray(sync?.results) ? sync.results : [];
+    freshCandles = syncRows.reduce((total, row) => total + Number(row.fetched || 0), 0);
 
-  if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
-  state.lastRuns = {
-    ...(state.lastRuns || {}),
-    "stocks:1D": {
-      at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
-      total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
-      suppressedSignals: delivery.suppressed, errors: errors.length, synced: syncRows.length, freshCandles, status: "OK"
+    stage = "scan";
+    const rows = await scanStocks(selection.symbols);
+    const state = await loadAutomationState(automationStatePath);
+    const delivery = selectDeliverySignals(rows, options.sentKeys ?? state.sentKeys, "1D", trigger);
+    logScanErrors("stocks:1D", rows);
+    const errors = rows.filter(row => row.status === "ERROR");
+    const allFailed = rows.length > 0 && errors.length === rows.length;
+    const shouldSend = delivery.delivered.length > 0 || settings.telegram.sendNoSignalSummary || allFailed;
+    const scopeLabel = selection.scopes.join("+");
+    const telegramText = shouldSend ? formatAutomationReport("1D", rows, delivery, settings, trigger, `CHỨNG KHOÁN VN · ${scopeLabel}`) : "";
+
+    stage = "telegram";
+    if (telegramText && options.deferTelegram !== true) await sendTelegramText(token, settings.telegram.chatId, telegramText);
+
+    stage = "state-ok";
+    if (options.deferTelegram !== true) state.sentKeys = delivery.sentKeys;
+    state.lastRuns = {
+      ...(state.lastRuns || {}),
+      "stocks:1D": {
+        at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
+        total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+        suppressedSignals: delivery.suppressed, errors: errors.length, synced: syncRows.length, freshCandles, status: "OK", stage: "done"
+      }
+    };
+    await saveAutomationState(automationStatePath, state);
+    return {
+      timeframe: "1D", scopes: selection.scopes, total: rows.length,
+      detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
+      suppressedSignals: delivery.suppressed, errors: errors.length,
+      synced: syncRows.length, freshCandles,
+      messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error && error.cause ? error.cause : null;
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(), job: "stocks:1D", stage, error: message,
+      cause: cause ? { name: cause.name, code: cause.code, errno: cause.errno, syscall: cause.syscall, address: cause.address, port: cause.port, message: cause.message } : undefined
+    }));
+    try {
+      const failedState = await loadAutomationState(automationStatePath);
+      failedState.lastRuns = {
+        ...(failedState.lastRuns || {}),
+        "stocks:1D": {
+          at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
+          total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 1,
+          synced: syncRows.length, freshCandles, status: "ERROR", stage, error: message
+        }
+      };
+      await saveAutomationState(automationStatePath, failedState);
+    } catch (stateError) {
+      console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:1D", stage: "state-error", error: stateError.message }));
     }
-  };
-  await saveAutomationState(automationStatePath, state);
-  return {
-    timeframe: "1D", scopes: selection.scopes, total: rows.length,
-    detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
-    suppressedSignals: delivery.suppressed, errors: errors.length,
-    synced: syncRows.length, freshCandles,
-    messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
-  };
+    throw new Error(`Stock D1 lỗi tại ${stage}: ${message}`, { cause: error });
+  }
 }
 
 async function scanFocusItems(items) {

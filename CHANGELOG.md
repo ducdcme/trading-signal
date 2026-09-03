@@ -1,3 +1,13 @@
+# v3.3.2
+
+- Integrate completed Bar Replay FINAL R2 into the production branch.
+- Finalize Long/Short replay position labels, hover layout, persistent drawings and SMC Order Block behavior.
+- Prevent replay TP/SL exits from being evaluated before the visual Entry bar, eliminating exit arrows drawn into the past.
+- Harden Stock D1 automation state handling: failures now persist `ERROR` with the failing stage instead of leaving `RUNNING`.
+- Add stage-aware Stock D1 diagnostics and nested `fetch()` cause logging for PM2/server logs.
+- Refresh Stock D1 state in the UI immediately after a failed manual run.
+- Recommended with stocks-data-collector v0.2.8 for holiday-safe VN Stock handling.
+
 # v3.3.1
 
 - Fix VN Stock bulk prepare: active symbols are no longer assumed to have complete candle history.

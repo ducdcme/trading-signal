@@ -630,7 +630,7 @@ function stockRunDetail(run) {
   if (!run) return { text: "Stock D1: chưa chạy trong phiên này.", className: "" };
   if (run.status === "RUNNING") return { text: "Stock D1: đang chạy Daily Sync → quét D1…", className: "running" };
   if (run.status === "SKIPPED") return { text: `Stock D1: bỏ qua · ${run.reason || "không có dữ liệu để quét"}.`, className: "skipped" };
-  if (run.status === "ERROR") return { text: `Stock D1: lỗi · ${run.errors || 1} lỗi.`, className: "error" };
+  if (run.status === "ERROR") return { text: `Stock D1: lỗi tại ${run.stage || "không xác định"} · ${run.errors || 1} lỗi.`, className: "error" };
   return { text: `Stock D1: hoàn tất · sync ${run.synced || 0} mã · quét ${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi.`, className: "ok" };
 }
 
@@ -648,7 +648,7 @@ function renderLastRuns(lastRuns = {}) {
     let detail;
     if (run.status === "RUNNING") detail = "Đang chạy…";
     else if (run.status === "SKIPPED") detail = `Bỏ qua: ${run.reason || "không có dữ liệu mới"}`;
-    else if (run.status === "ERROR") detail = `Lỗi: ${run.errors || 1}`;
+    else if (run.status === "ERROR") detail = `Lỗi: ${run.errors || 1}${run.stage ? ` · ${run.stage}` : ""}`;
     else detail = `${run.total || 0} mã · ${run.sentSignals || 0} tín hiệu mới · ${run.errors || 0} lỗi`;
     return `<div><b>${timeframe}</b> · ${h(new Date(run.at).toLocaleString("vi-VN"))} · ${h(detail)}</div>`;
   });
@@ -956,7 +956,10 @@ async function runStocksNow(button) {
     const result = await api("/api/automation/stocks/run", { method: "POST" });
     $("#automationState").textContent = `Stock D1: sync ${result.synced} mã · quét ${result.total} mã · gửi ${result.sentSignals} tín hiệu · ${result.errors} lỗi.`;
     automationSnapshot = await api("/api/automation"); renderLastRuns(automationSnapshot.state.lastRuns);
-  } catch (error) { $("#automationState").textContent = `Lỗi: ${error.message}`; }
+  } catch (error) {
+    $("#automationState").textContent = `Lỗi: ${error.message}`;
+    try { automationSnapshot = await api("/api/automation"); renderLastRuns(automationSnapshot.state.lastRuns); } catch {}
+  }
   finally { button.disabled = false; }
 }
 $("#runStocksDailyNow").addEventListener("click", event => runStocksNow(event.currentTarget));

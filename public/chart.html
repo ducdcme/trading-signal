@@ -20,7 +20,7 @@
         <div class="smc-settings-panel">
           <label><input id="showSwingStructure" type="checkbox" checked> Swing Structure</label>
           <label><input id="showInternalStructure" type="checkbox"> Internal Structure</label>
-          <label><input id="showOrderBlocks" type="checkbox"> Order Block</label>
+          <label><input id="showOrderBlocks" type="checkbox" checked> Order Block</label>
           <label><input id="showFairValueGaps" type="checkbox"> FVG</label>
           <label><input id="showEqualLevels" type="checkbox" checked> EQH/EQL</label>
           <label><input id="showPremiumZone" type="checkbox"> Premium</label>
@@ -32,6 +32,17 @@
       <label>Số nến <select id="visibleBars"><option value="100">100</option><option value="160" selected>160</option><option value="250">250</option><option value="500">500</option><option id="customVisibleBars" value="160" hidden>160</option></select></label>
       <button id="autoScale" class="chart-tool-button" type="button" title="Khôi phục trục giá tự động">Trục Y: Tự động</button>
       <button id="resetView" class="chart-tool-button" type="button" title="Trở về các nến mới nhất">Về hiện tại</button>
+      <div class="replay-controls" aria-label="Bar Replay">
+        <button id="replayToggle" class="chart-tool-button" type="button" title="Chọn một nến quá khứ để bắt đầu Bar Replay">Bar Replay</button>
+        <button id="replayPrev" class="chart-tool-button replay-step" type="button" title="Lùi 1 nến" hidden>◀</button>
+        <span id="replayStatus" class="replay-status" hidden></span>
+        <button id="replayNext" class="chart-tool-button replay-step" type="button" title="Tiến 1 nến" hidden>▶</button>
+        <button id="replayLong" class="chart-tool-button position-long" type="button" title="Vẽ vị thế Long: click chart để đặt, kéo TP/SL hoặc kéo cả vị thế" hidden>Long</button>
+        <button id="replayShort" class="chart-tool-button position-short" type="button" title="Vẽ vị thế Short: click chart để đặt, kéo TP/SL hoặc kéo cả vị thế" hidden>Short</button>
+        <button id="replayDeletePosition" class="chart-tool-button position-delete" type="button" title="Xóa vị thế đang chọn" hidden disabled>Xóa vị thế</button>
+        <span id="positionToolStatus" class="replay-status" hidden></span>
+        <button id="replayExit" class="chart-tool-button replay-exit" type="button" title="Thoát Bar Replay" hidden>Thoát Replay</button>
+      </div>
     </section>
     <div class="chart-workspace">
       <section class="chart-shell">
