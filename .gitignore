@@ -5,3 +5,4 @@ data/automation.json
 data/automation-state.json
 data/focus-watchlist.json
 data/new-coin-watchlist.json
+.DS_Store

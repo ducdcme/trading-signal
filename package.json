@@ -1,6 +1,6 @@
 {
   "name": "trading-signal",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "private": true,
   "type": "module",
   "description": "Multi-asset closed-candle signal scanner with Telegram automation.",

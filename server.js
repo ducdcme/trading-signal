@@ -150,6 +150,23 @@ function chartPayload(candles, instrument, timeframe) {
   };
 }
 
+
+function errorCauseSummary(error) {
+  const cause = error?.cause;
+  if (!cause) return undefined;
+  const summary = {
+    name: cause.name,
+    code: cause.code,
+    message: cause.message
+  };
+  if (Array.isArray(cause.errors)) {
+    summary.errors = cause.errors.slice(0, 5).map(item => ({
+      name: item?.name, code: item?.code, message: item?.message, address: item?.address, port: item?.port
+    }));
+  }
+  return Object.fromEntries(Object.entries(summary).filter(([, value]) => value !== undefined && value !== ""));
+}
+
 function logScanErrors(job, rows) {
   for (const row of rows.filter(item => item.status === "ERROR")) {
     console.error(JSON.stringify({ timestamp: new Date().toISOString(), job, asset: row.asset || row.symbol || row.instrumentId, exchange: row.exchange, error: row.error }));
@@ -219,33 +236,29 @@ async function resolveStockAutomationSymbols(settings) {
 }
 
 async function runStocksAutomation(trigger = "manual", options = {}) {
-  let stage = "settings";
-  let selection = { scopes: [], symbols: [] };
-  let syncRows = [];
-  let freshCandles = 0;
-  try {
-    const settings = effectiveAutomation(await loadAutomation(automationPath));
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
-    if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
-    if (!settings.assets.stocks.enabled) throw new Error("Cảnh báo Chứng khoán Việt Nam đang tắt");
+  const settings = effectiveAutomation(await loadAutomation(automationPath));
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env");
+  if (!settings.telegram.chatId) throw new Error("Chưa cấu hình Telegram Chat ID");
+  if (!settings.assets.stocks.enabled) throw new Error("Cảnh báo Chứng khoán Việt Nam đang tắt");
 
-    stage = "resolve-symbols";
+  let stage = "resolve-symbols";
+  let selection = { scopes: Array.isArray(settings.assets?.stocks?.scopes) ? settings.assets.stocks.scopes : ["WATCHLIST"], symbols: [] };
+  const runningState = await loadAutomationState(automationStatePath);
+  runningState.lastRuns = {
+    ...(runningState.lastRuns || {}),
+    "stocks:1D": { at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes, total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, synced: 0, freshCandles: 0, status: "RUNNING", stage }
+  };
+  await saveAutomationState(automationStatePath, runningState);
+
+  try {
     selection = await resolveStockAutomationSymbols(settings);
     if (!selection.symbols.length) throw new Error("Stock automation chưa có mã prepared để quét");
 
-    stage = "state-running";
-    const runningState = await loadAutomationState(automationStatePath);
-    runningState.lastRuns = {
-      ...(runningState.lastRuns || {}),
-      "stocks:1D": { at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes, total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 0, synced: 0, freshCandles: 0, status: "RUNNING", stage: "daily-sync" }
-    };
-    await saveAutomationState(automationStatePath, runningState);
-
     stage = "daily-sync";
     const sync = await syncStockDaily(selection.symbols, { ...stocksApi, timeoutMs: Number(config.stocks.adminTimeoutMs) || 300_000 });
-    syncRows = Array.isArray(sync?.results) ? sync.results : [];
-    freshCandles = syncRows.reduce((total, row) => total + Number(row.fetched || 0), 0);
+    const syncRows = Array.isArray(sync?.results) ? sync.results : [];
+    const freshCandles = syncRows.reduce((total, row) => total + Number(row.fetched || 0), 0);
 
     stage = "scan";
     const rows = await scanStocks(selection.symbols);
@@ -268,7 +281,7 @@ async function runStocksAutomation(trigger = "manual", options = {}) {
       "stocks:1D": {
         at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
         total: rows.length, detectedSignals: delivery.detected.length, sentSignals: delivery.delivered.length,
-        suppressedSignals: delivery.suppressed, errors: errors.length, synced: syncRows.length, freshCandles, status: "OK", stage: "done"
+        suppressedSignals: delivery.suppressed, errors: errors.length, synced: syncRows.length, freshCandles, status: "OK"
       }
     };
     await saveAutomationState(automationStatePath, state);
@@ -280,11 +293,8 @@ async function runStocksAutomation(trigger = "manual", options = {}) {
       messageSent: shouldSend && options.deferTelegram !== true, telegramText, sentKeys: delivery.sentKeys
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const cause = error instanceof Error && error.cause ? error.cause : null;
     console.error(JSON.stringify({
-      timestamp: new Date().toISOString(), job: "stocks:1D", stage, error: message,
-      cause: cause ? { name: cause.name, code: cause.code, errno: cause.errno, syscall: cause.syscall, address: cause.address, port: cause.port, message: cause.message } : undefined
+      timestamp: new Date().toISOString(), job: "stocks:1D", stage, error: error.message, cause: errorCauseSummary(error)
     }));
     try {
       const failedState = await loadAutomationState(automationStatePath);
@@ -292,15 +302,17 @@ async function runStocksAutomation(trigger = "manual", options = {}) {
         ...(failedState.lastRuns || {}),
         "stocks:1D": {
           at: Date.now(), assetGroup: "stocks", timeframe: "1D", trigger, scopes: selection.scopes,
-          total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 1,
-          synced: syncRows.length, freshCandles, status: "ERROR", stage, error: message
+          total: 0, detectedSignals: 0, sentSignals: 0, suppressedSignals: 0, errors: 1, synced: 0, freshCandles: 0,
+          status: "ERROR", stage, error: error.message
         }
       };
       await saveAutomationState(automationStatePath, failedState);
     } catch (stateError) {
       console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "stocks:1D", stage: "state-error", error: stateError.message }));
     }
-    throw new Error(`Stock D1 lỗi tại ${stage}: ${message}`, { cause: error });
+    const wrapped = new Error(`Stock D1 lỗi tại ${stage}: ${error.message}`);
+    wrapped.cause = error;
+    throw wrapped;
   }
 }
 
@@ -712,7 +724,10 @@ async function schedulerTick() {
       for (const key of completedKeys) latest.lastSlots[key] = slot;
       latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "failed-send", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length } };
       await saveAutomationState(automationStatePath, latest);
-      console.error(`Automation batch ${slot}: ${error.message}`);
+      console.error(JSON.stringify({
+        timestamp: new Date().toISOString(), job: "automation:batch-telegram", slot,
+        error: error.message, cause: errorCauseSummary(error)
+      }));
     }
   } finally { schedulerBusy = false; }
 }

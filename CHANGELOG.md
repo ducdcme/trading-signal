@@ -1,3 +1,10 @@
+# v3.3.3
+
+- Add Telegram transport retry for transient network failures.
+- Retry Telegram delivery only, without rerunning automation scans.
+- Improve batch error logging with nested transport cause codes.
+- Preserve Stock D1 group isolation and automation state handling.
+
 # v3.3.2
 
 - Integrate completed Bar Replay FINAL R2 into the production branch.
