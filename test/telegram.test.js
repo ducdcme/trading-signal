@@ -60,3 +60,24 @@ test("Telegram API errors are not retried as transport failures", async () => {
     if (oldRetries === undefined) delete process.env.TELEGRAM_REQUEST_RETRIES; else process.env.TELEGRAM_REQUEST_RETRIES = oldRetries;
   }
 });
+
+
+test("Telegram scheduled delivery can disable immediate retries", async () => {
+  const originalFetch = globalThis.fetch;
+  const oldRetries = process.env.TELEGRAM_REQUEST_RETRIES;
+  process.env.TELEGRAM_REQUEST_RETRIES = "5";
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    const error = new TypeError("fetch failed");
+    error.cause = { name: "AggregateError", code: "ETIMEDOUT" };
+    throw error;
+  };
+  try {
+    await assert.rejects(() => sendTelegramText(token, "123", "hello", { retries: 0 }), /fetch failed/);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldRetries === undefined) delete process.env.TELEGRAM_REQUEST_RETRIES; else process.env.TELEGRAM_REQUEST_RETRIES = oldRetries;
+  }
+});

@@ -9,7 +9,8 @@ import { candlesForTimeframe } from "./lib/candles.js";
 import { discoverDexPoolOptions, fetchDexCandles } from "./lib/geckoterminal.js";
 import { loadEnvFile } from "./lib/env.js";
 import { loadAutomation, loadAutomationState, localClock, normalizeAutomation, saveAutomation, saveAutomationState } from "./lib/automation-store.js";
-import { findTelegramChats, sendTelegramText } from "./lib/telegram.js";
+import { findTelegramChats, isTransientTransportError, sendTelegramText } from "./lib/telegram.js";
+import { createPendingTelegram, reschedulePendingTelegram, telegramQueueDue, telegramRetryDelaysMs } from "./lib/telegram-queue.js";
 import { selectDeliverySignals } from "./lib/automation-signals.js";
 import { clearSessionCookie, createSessionToken, isSameOrigin, loadAuthConfig, LoginRateLimiter, parseCookies, sessionCookie, verifyPassword, verifySessionToken } from "./lib/auth.js";
 import { deleteFocusEntry, extendFocusEntry, loadFocusList, upsertFocusEntry } from "./lib/focus-store.js";
@@ -627,6 +628,60 @@ async function runNewCoinAutomation(trigger = "manual", options = {}) {
   };
 }
 
+
+function telegramErrorCode(error) {
+  const cause = error?.cause;
+  return String(cause?.code || error?.code || "").toUpperCase();
+}
+
+async function retryPendingTelegram(settings) {
+  const state = await loadAutomationState(automationStatePath);
+  const queue = Array.isArray(state.pendingTelegram) ? state.pendingTelegram : [];
+  if (!queue.length) return;
+  const retryDelays = telegramRetryDelaysMs();
+  let changed = false;
+  const nextQueue = [];
+  for (const item of queue) {
+    if (!telegramQueueDue(item)) { nextQueue.push(item); continue; }
+    try {
+      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, item.chatId || settings.telegram.chatId, item.text, { retries: 0 });
+      state.sentKeys = [...new Set([...(state.sentKeys || []), ...(item.sentKeys || [])])];
+      if (item.slot) {
+        const previous = state.batchSlots?.[item.slot] || {};
+        state.batchSlots = { ...(state.batchSlots || {}), [item.slot]: { ...previous, status: "sent-retry", at: Date.now(), attempts: item.attempts + 1 } };
+      }
+      changed = true;
+      console.log(JSON.stringify({ timestamp: new Date().toISOString(), job: "automation:batch-telegram-retry", slot: item.slot, status: "sent", attempts: item.attempts + 1 }));
+    } catch (error) {
+      if (!isTransientTransportError(error)) {
+        if (item.slot) {
+          const previous = state.batchSlots?.[item.slot] || {};
+          state.batchSlots = { ...(state.batchSlots || {}), [item.slot]: { ...previous, status: "failed-send", at: Date.now(), attempts: item.attempts + 1 } };
+        }
+        changed = true;
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "automation:batch-telegram-retry", slot: item.slot, status: "failed-permanent", error: error.message, cause: errorCauseSummary(error) }));
+        continue;
+      }
+      const retried = reschedulePendingTelegram(item, Date.now(), telegramErrorCode(error), retryDelays);
+      changed = true;
+      if (retried.status === "FAILED") {
+        if (item.slot) {
+          const previous = state.batchSlots?.[item.slot] || {};
+          state.batchSlots = { ...(state.batchSlots || {}), [item.slot]: { ...previous, status: "failed-send", at: Date.now(), attempts: retried.attempts } };
+        }
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "automation:batch-telegram-retry", slot: item.slot, status: "retry-exhausted", attempts: retried.attempts, error: error.message, cause: errorCauseSummary(error) }));
+      } else {
+        nextQueue.push(retried);
+        console.error(JSON.stringify({ timestamp: new Date().toISOString(), job: "automation:batch-telegram-retry", slot: item.slot, status: "rescheduled", attempts: retried.attempts, nextRetryAt: retried.nextRetryAt, error: error.message, cause: errorCauseSummary(error) }));
+      }
+    }
+  }
+  if (changed) {
+    state.pendingTelegram = nextQueue;
+    await saveAutomationState(automationStatePath, state);
+  }
+}
+
 let schedulerBusy = false;
 
 function scheduledJobLabel(job) {
@@ -643,6 +698,7 @@ async function schedulerTick() {
   schedulerBusy = true;
   try {
     const settings = effectiveAutomation(await loadAutomation(automationPath));
+    await retryPendingTelegram(settings);
     const clock = localClock(new Date(), settings.timezone);
     const jobs = dueAutomationJobs(clock, settings, config);
     if (!jobs.length) return;
@@ -652,11 +708,10 @@ async function schedulerTick() {
     const pendingJobs = jobs.filter(job => initial.lastSlots?.[job.key] !== slot);
     if (!pendingJobs.length) return;
 
-    // A persisted batch marker gives the scheduler at-most-once behavior across
-    // process restarts. If a process died while a Telegram send was in-flight,
-    // we deliberately do not retry that slot because avoiding duplicates is the
-    // safer policy for alert delivery.
-    if (["sending", "sent", "failed-send"].includes(initial.batchSlots?.[slot]?.status)) return;
+    // A persisted batch marker keeps market scans at-most-once across restarts.
+    // Telegram transport failures are retried from the persisted rendered-message
+    // queue; the market scan itself is never rerun for the same slot.
+    if (["sending", "sent", "sent-retry", "pending-send", "failed-send"].includes(initial.batchSlots?.[slot]?.status)) return;
 
     const reports = [];
     const failures = [];
@@ -708,8 +763,9 @@ async function schedulerTick() {
     };
     await saveAutomationState(automationStatePath, beforeSend);
 
+    const batchText = formatScheduledBatchReport(reports, settings, new Date(), failures);
     try {
-      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, formatScheduledBatchReport(reports, settings, new Date(), failures));
+      await sendTelegramText(process.env.TELEGRAM_BOT_TOKEN, settings.telegram.chatId, batchText, { retries: 0 });
       const latest = await loadAutomationState(automationStatePath);
       latest.sentKeys = [...new Set(sharedSentKeys)];
       latest.lastSlots = { ...(latest.lastSlots || {}) };
@@ -717,15 +773,26 @@ async function schedulerTick() {
       latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "sent", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length } };
       await saveAutomationState(automationStatePath, latest);
     } catch (error) {
-      // Keep the slot consumed. We do not retry a possibly-delivered Telegram
-      // batch after a restart, which enforces the project's no-duplicate policy.
+      // Keep the scan slot consumed. Transient Telegram failures persist the already
+      // rendered batch and retry it later without rerunning any market scan.
       const latest = await loadAutomationState(automationStatePath);
       latest.lastSlots = { ...(latest.lastSlots || {}) };
       for (const key of completedKeys) latest.lastSlots[key] = slot;
-      latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "failed-send", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length } };
+      if (isTransientTransportError(error)) {
+        const retryDelays = telegramRetryDelaysMs();
+        const pending = createPendingTelegram({
+          id: `batch:${slot}`, slot, chatId: settings.telegram.chatId, text: batchText, sentKeys: sharedSentKeys,
+          now: Date.now(), errorCode: telegramErrorCode(error)
+        }, retryDelays);
+        latest.pendingTelegram = [...(latest.pendingTelegram || []).filter(item => item.id !== pending.id), pending];
+        latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "pending-send", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length, attempts: 1, nextRetryAt: pending.nextRetryAt } };
+      } else {
+        latest.batchSlots = { ...(latest.batchSlots || {}), [slot]: { status: "failed-send", at: Date.now(), jobs: completedKeys, reports: reports.length, failures: failures.length, attempts: 1 } };
+      }
       await saveAutomationState(automationStatePath, latest);
       console.error(JSON.stringify({
         timestamp: new Date().toISOString(), job: "automation:batch-telegram", slot,
+        status: isTransientTransportError(error) ? "queued" : "failed-permanent",
         error: error.message, cause: errorCauseSummary(error)
       }));
     }
